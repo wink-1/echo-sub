@@ -20,6 +20,9 @@ declare global {
       // 音频
       sendAudioPCMData: (data: Uint8Array) => void
 
+      // 音频源上报
+      reportAudioSource: (source: string) => void
+
       // 系统音频源
       getSystemAudioSource: () => Promise<string | null>
 
@@ -27,6 +30,7 @@ declare global {
       openSubtitleWindow: () => Promise<{ success: boolean }>
       closeSubtitleWindow: () => Promise<{ success: boolean }>
       isSubtitleWindowOpen: () => Promise<boolean>
+      subtitleDrag: (deltaX: number, deltaY: number) => Promise<void>
     }
   }
 }

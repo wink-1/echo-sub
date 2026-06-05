@@ -10,7 +10,6 @@ class AudioPCMProcessor {
   async start(stream: MediaStream): Promise<void> {
     this.audioContext = new AudioContext({ sampleRate: this.targetSampleRate })
 
-    // 确保 AudioContext 处于 running 状态 (Web Audio API 需要用户交互后才能 resume)
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume()
     }
@@ -19,20 +18,15 @@ class AudioPCMProcessor {
 
     this.sourceNode = this.audioContext.createMediaStreamSource(stream)
 
-    // 使用 ScriptProcessorNode 将音频转为 PCM
-    // bufferSize=4096 约 256ms @ 16kHz
     this.scriptNode = this.audioContext.createScriptProcessor(4096, 1, 1)
 
     this.scriptNode.onaudioprocess = (event) => {
       const inputData = event.inputBuffer.getChannelData(0)
-      // float32 → int16 PCM
       const pcm16 = new Int16Array(inputData.length)
       for (let i = 0; i < inputData.length; i++) {
         const s = Math.max(-1, Math.min(1, inputData[i]))
         pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff
       }
-      // IPC 传输: ArrayBuffer 在 IPC 中可能丢失, 用 Uint8Array 包装
-      // 用 slice 创建独立副本 (避免底层 buffer 被复用)
       const bytes = new Uint8Array(pcm16.buffer.slice(0))
       window.electronAPI?.sendAudioPCMData(bytes)
     }
@@ -59,14 +53,12 @@ export default function ControlPanel(): JSX.Element {
   const [isSubtitleOpen, setIsSubtitleOpen] = useState(false)
   const processorRef = useRef<AudioPCMProcessor | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
-
-  // 检查音频电平 (用于 UI 反馈)
   const [audioLevel, setAudioLevel] = useState(0)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animFrameRef = useRef<number>(0)
+  const [sourceLanguage, setSourceLanguage] = useState('auto')
 
   useEffect(() => {
-    // 检查字幕窗口状态
     const checkSubtitle = async () => {
       const open = await window.electronAPI?.isSubtitleWindowOpen()
       setIsSubtitleOpen(!!open)
@@ -86,7 +78,7 @@ export default function ControlPanel(): JSX.Element {
     const tick = () => {
       analyser.getByteFrequencyData(dataArray)
       const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length
-      setAudioLevel(Math.min(avg / 128, 1)) // normalize 0-1
+      setAudioLevel(Math.min(avg / 128, 1))
       animFrameRef.current = requestAnimationFrame(tick)
     }
     tick()
@@ -98,9 +90,104 @@ export default function ControlPanel(): JSX.Element {
     setAudioLevel(0)
   }
 
+  const handleLanguageChange = async (lang: string) => {
+    setSourceLanguage(lang)
+    await window.electronAPI?.updateSettings({ sourceLanguage: lang })
+  }
+
+  const startSystemAudio = async () => {
+    setStatus('connecting')
+    setErrorMsg('')
+
+    try {
+      const sourceId = await window.electronAPI?.getSystemAudioSource()
+      if (!sourceId) {
+        throw new Error('无法获取系统音频源。\n请确保已授予屏幕录制权限（系统设置 > 隐私与安全性 > 屏幕录制）')
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId
+          }
+        } as unknown as MediaTrackConstraints,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+            maxWidth: 1,
+            maxHeight: 1
+          }
+        } as unknown as MediaTrackConstraints
+      })
+
+      stream.getVideoTracks().forEach(t => t.stop())
+
+      if (stream.getAudioTracks().length === 0) {
+        throw new Error('系统音频捕获失败：未检测到音频轨道')
+      }
+
+      streamRef.current = stream
+      setAudioSource('system')
+      window.electronAPI?.reportAudioSource?.('system')
+
+      startLevelMonitor(stream)
+      const processor = new AudioPCMProcessor()
+      await processor.start(stream)
+      processorRef.current = processor
+
+      const result = await window.electronAPI?.startCapture()
+      if (result?.success !== false) {
+        setIsCapturing(true)
+        setStatus('running')
+      }
+    } catch (err) {
+      setStatus('error')
+      setErrorMsg(`系统音频捕获失败: ${err instanceof Error ? err.message : String(err)}\n\n请确认：\n1. 系统设置 > 隐私与安全性 > 屏幕录制 中已授权 EchoSub\n2. 有音频正在播放\n\n如无法使用系统音频，可点击下方"使用麦克风"按钮。`)
+    }
+  }
+
+  const startMicrophone = async () => {
+    setStatus('connecting')
+    setErrorMsg('')
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      })
+
+      streamRef.current = stream
+      setAudioSource('microphone')
+      window.electronAPI?.reportAudioSource?.('microphone')
+
+      startLevelMonitor(stream)
+      const processor = new AudioPCMProcessor()
+      await processor.start(stream)
+      processorRef.current = processor
+
+      const result = await window.electronAPI?.startCapture()
+      if (result?.success !== false) {
+        setIsCapturing(true)
+        setStatus('running')
+      } else {
+        setStatus('error')
+        setErrorMsg('启动失败')
+      }
+    } catch (err) {
+      setStatus('error')
+      setErrorMsg(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   const handleToggle = async () => {
     if (isCapturing) {
-      // 停止
       processorRef.current?.stop()
       streamRef.current?.getTracks().forEach(t => t.stop())
       processorRef.current = null
@@ -112,90 +199,8 @@ export default function ControlPanel(): JSX.Element {
       setErrorMsg('')
       setAudioSource('none')
     } else {
-      // 开始
-      setStatus('connecting')
-      setErrorMsg('')
-
-      try {
-        let stream: MediaStream
-        let source: 'system' | 'microphone' = 'microphone'
-
-        // 尝试使用系统音频 (桌面音频捕获)
-        try {
-          const sourceId = await window.electronAPI?.getSystemAudioSource()
-          if (sourceId) {
-            // 注意: chromeMediaSource: 'desktop' 同时需要 audio 和 video
-            // 然后丢弃 video track
-            stream = await navigator.mediaDevices.getUserMedia({
-              audio: {
-                mandatory: {
-                  chromeMediaSource: 'desktop',
-                  chromeMediaSourceId: sourceId
-                }
-              } as unknown as MediaTrackConstraints,
-              video: {
-                mandatory: {
-                  chromeMediaSource: 'desktop',
-                  chromeMediaSourceId: sourceId,
-                  maxWidth: 1,
-                  maxHeight: 1
-                }
-              } as unknown as MediaTrackConstraints
-            })
-            // 丢弃 video track, 只保留 audio
-            stream.getVideoTracks().forEach(t => t.stop())
-            stream.removeTrack(stream.getVideoTracks()[0])
-
-            if (stream.getAudioTracks().length > 0) {
-              source = 'system'
-              console.log('System audio captured via desktopCapturer')
-            } else {
-              throw new Error('No audio track in desktop capture')
-            }
-          } else {
-            throw new Error('No system audio source available')
-          }
-        } catch (loopbackErr) {
-          console.warn('System audio capture failed:', loopbackErr)
-          console.log('Falling back to microphone...')
-          // 降级到麦克风输入
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              channelCount: 1,
-              sampleRate: 16000,
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true
-            }
-          })
-          console.log('Microphone captured')
-        }
-
-        streamRef.current = stream
-        setAudioSource(source)
-
-        // 启动音频电平监测
-        startLevelMonitor(stream)
-
-        // 创建 PCM 处理器并发送音频
-        const processor = new AudioPCMProcessor()
-        await processor.start(stream)
-        processorRef.current = processor
-
-        // 通知主进程后端开始接收音频
-        const result = await window.electronAPI?.startCapture()
-        if (result?.success !== false) {
-          setIsCapturing(true)
-          setStatus('running')
-        } else {
-          setStatus('error')
-          setErrorMsg('启动失败')
-        }
-      } catch (err) {
-        console.error('Audio capture error:', err)
-        setStatus('error')
-        setErrorMsg(err instanceof Error ? err.message : String(err))
-      }
+      // 默认使用系统音频
+      await startSystemAudio()
     }
   }
 
@@ -245,7 +250,7 @@ export default function ControlPanel(): JSX.Element {
         </span>
       </div>
 
-      {/* 主按钮 */}
+      {/* 主按钮 — 系统音频 */}
       <button
         onClick={handleToggle}
         className={`w-full py-3 rounded-lg font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 ${
@@ -261,13 +266,26 @@ export default function ControlPanel(): JSX.Element {
           </>
         ) : (
           <>
-            <span className="w-0 h-0 border-t-4 border-b-4 border-l-6 border-transparent border-l-white ml-0.5" />
-            开始翻译
+            <span className="text-base">🔊</span>
+            开始翻译 (系统音频)
           </>
         )}
       </button>
 
-      {/* 音频电平指示器 */}
+      {/* 麦克风降级按钮 */}
+      {!isCapturing && (
+        <button
+          onClick={startMicrophone}
+          className="w-full py-2 rounded-lg text-xs font-medium transition-all
+            bg-gray-700/30 text-gray-400 hover:bg-gray-700/50 border border-gray-700/30
+            flex items-center justify-center gap-1.5"
+        >
+          <span>🎤</span>
+          使用麦克风（非系统音频）
+        </button>
+      )}
+
+      {/* 音频源状态 + 电平指示器 */}
       {isCapturing && (
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs">
@@ -275,18 +293,17 @@ export default function ControlPanel(): JSX.Element {
               {audioSource === 'system' ? (
                 <>
                   <span className="text-sm">🔊</span>
-                  <span>系统音频</span>
+                  <span className="font-semibold text-green-400">系统音频</span>
                 </>
               ) : (
                 <>
                   <span className="text-sm">🎤</span>
-                  <span>麦克风</span>
+                  <span className="font-semibold text-yellow-400">麦克风</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-400 ml-1">⚠ 非系统音频</span>
                 </>
               )}
             </span>
-            <span className={`text-xs font-medium ${
-              audioLevel > 0.05 ? 'text-green-400' : 'text-gray-500'
-            }`}>
+            <span className={`text-xs font-medium ${audioLevel > 0.05 ? 'text-green-400' : 'text-gray-500'}`}>
               {audioLevel > 0.05 ? '● 检测到音频' : '○ 未检测到音频'}
             </span>
           </div>
@@ -305,16 +322,31 @@ export default function ControlPanel(): JSX.Element {
       )}
 
       {errorMsg && (
-        <div className="bg-red-500/10 border border-red-500/20 text-red-300 text-xs p-3 rounded-lg">
+        <div className="bg-red-500/10 border border-red-500/20 text-red-300 text-xs p-3 rounded-lg whitespace-pre-line">
           {errorMsg}
         </div>
       )}
 
-      {/* 设置和悬浮窗 */}
+      {/* 源语言选择 + 目标语言 */}
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-gray-700/30 rounded-lg p-3">
           <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">源语言</div>
-          <div className="text-sm text-white font-medium">自动检测</div>
+          <select
+            value={sourceLanguage}
+            onChange={(e) => handleLanguageChange(e.target.value)}
+            className="bg-transparent text-sm text-white font-medium w-full outline-none cursor-pointer"
+            disabled={isCapturing}
+          >
+            <option value="auto">自动检测</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+            <option value="zh">中文</option>
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+            <option value="es">Español</option>
+            <option value="ru">Русский</option>
+          </select>
         </div>
         <div className="bg-gray-700/30 rounded-lg p-3">
           <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">目标语言</div>

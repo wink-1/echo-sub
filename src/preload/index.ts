@@ -35,6 +35,11 @@ const electronAPI = {
   subtitleDrag: (deltaX: number, deltaY: number) =>
     ipcRenderer.invoke('subtitle-drag', deltaX, deltaY),
 
+  // 音频源上报
+  reportAudioSource: (source: string) => {
+    ipcRenderer.send('audio-source-changed', source)
+  },
+
   // 获取系统音频源 ID
   getSystemAudioSource: async (): Promise<string | null> => {
     try {
