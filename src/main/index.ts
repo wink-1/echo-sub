@@ -2,9 +2,9 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { startPythonBackend, stopPythonBackend } from './python-bridge'
 import { createSubtitleWindow } from './subtitle-window'
-import { startAudioCapture, stopAudioCapture } from './audio-capture'
+import { startAudioCapture, stopAudioCapture, registerAudioIpcHandlers } from './audio-capture'
 import { registerIpcHandlers } from './ipc-handlers'
-import { AppSettings, IPC_CHANNELS } from '../shared/types'
+import { AppSettings } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
 let subtitleWindow: BrowserWindow | null = null
@@ -14,7 +14,7 @@ const defaultSettings: AppSettings = {
   targetLanguage: 'zh',
   fontSize: 24,
   showBilingual: true,
-  asrModel: 'large-v3-turbo',
+  asrModel: 'base',
   translationModel: 'qwen2.5:7b',
   windowOpacity: 0.85
 }
@@ -45,6 +45,19 @@ function createMainWindow(): BrowserWindow {
 }
 
 app.whenReady().then(async () => {
+  // 初始化 electron-audio-loopback (注册 IPC handler)
+  try {
+    const { initMain } = await import('electron-audio-loopback')
+    initMain()
+    console.log('electron-audio-loopback initialized')
+  } catch (err) {
+    console.warn('Failed to initialize electron-audio-loopback:', err)
+    console.warn('System audio capture will not be available')
+  }
+
+  // 注册音频 PCM 数据转发 IPC
+  registerAudioIpcHandlers()
+
   // 启动 Python 后端
   await startPythonBackend()
 

@@ -9,7 +9,6 @@ import os
 import sys
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from asr import ASREngine
@@ -18,12 +17,8 @@ from corrector import Corrector
 
 app = FastAPI(title="EchoSub Backend")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 注意: 本地应用不需要 CORS 中间件
+# CORS 中间件会导致 WebSocket 连接被 403 拒绝
 
 # 全局引擎实例
 asr_engine: ASREngine | None = None

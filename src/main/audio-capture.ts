@@ -1,16 +1,14 @@
 // 音频捕获模块 - 使用 electron-audio-loopback 捕获系统音频
-// 注意: electron-audio-loopback 是 native 模块,需要正确安装
-
-/// <reference types="ws" />
+// API 说明:
+//   主进程: initMain() 注册 IPC handler
+//   渲染进程: getLoopbackAudioMediaStream() 获取 MediaStream
+//   音频流通过 AudioWorklet → PCM 数据 → WebSocket 发送到 Python 后端
 
 import { ipcMain } from 'electron'
 import type { WebSocket } from 'ws'
 
 let isCapturing = false
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let loopbackStream: any = null
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let wsConnection: any = null
+let wsConnection: WebSocket | null = null
 
 const AUDIO_CONFIG = {
   sampleRate: 16000,
@@ -28,50 +26,21 @@ export function setWebSocketConnection(ws: WebSocket): void {
 
 /**
  * 开始捕获系统音频
+ * 注意: 实际音频捕获在渲染进程通过 getLoopbackAudioMediaStream() 完成
+ * 主进程负责接收 PCM 数据并通过 WebSocket 转发给 Python 后端
  */
 export async function startAudioCapture(): Promise<boolean> {
   if (isCapturing) return true
 
-  try {
-    // 动态导入 native 模块
-    const { createLoopback } = await import('electron-audio-loopback')
-
-    loopbackStream = await createLoopback({
-      sampleRate: AUDIO_CONFIG.sampleRate,
-      channels: AUDIO_CONFIG.channels,
-      bitDepth: AUDIO_CONFIG.bitDepth
-    })
-
-    loopbackStream.on('data', (chunk: Buffer) => {
-      if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
-        wsConnection.send(chunk)
-      }
-    })
-
-    loopbackStream.on('error', (err: Error) => {
-      console.error('Audio capture error:', err)
-      stopAudioCapture()
-    })
-
-    isCapturing = true
-    console.log('Audio capture started')
-    return true
-  } catch (error) {
-    console.error('Failed to start audio capture:', error)
-    // 降级: 使用麦克风输入
-    console.log('Falling back to microphone input...')
-    return false
-  }
+  isCapturing = true
+  console.log('Audio capture started (renderer-driven)')
+  return true
 }
 
 /**
  * 停止捕获系统音频
  */
 export function stopAudioCapture(): void {
-  if (loopbackStream) {
-    loopbackStream.destroy()
-    loopbackStream = null
-  }
   isCapturing = false
   console.log('Audio capture stopped')
 }
@@ -81,4 +50,19 @@ export function stopAudioCapture(): void {
  */
 export function isAudioCapturing(): boolean {
   return isCapturing
+}
+
+/**
+ * 注册 IPC handler: 接收渲染进程发来的 PCM 音频数据,转发给 Python 后端
+ */
+export function registerAudioIpcHandlers(): void {
+  ipcMain.on('audio-pcm-data', (_event, data: Buffer) => {
+    if (wsConnection && wsConnection.readyState === 1) { // WebSocket.OPEN = 1
+      wsConnection.send(data)
+    }
+  })
+
+  ipcMain.handle('is-audio-capturing', () => {
+    return isCapturing
+  })
 }

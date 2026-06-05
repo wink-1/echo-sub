@@ -10,6 +10,8 @@ export interface ElectronAPI {
   onTranslationCorrection: (callback: (data: unknown) => void) => void
   onBackendStatus: (callback: (status: string) => void) => void
   getSettings: () => Promise<AppSettings>
+  sendAudioPCMData: (data: ArrayBuffer) => void
+  isAudioCapturing: () => Promise<boolean>
 }
 
 declare global {
