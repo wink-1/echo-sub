@@ -1,4 +1,5 @@
-import { BrowserWindow, join } from 'electron'
+import { BrowserWindow } from 'electron'
+import { join } from 'path'
 
 let subtitleWindow: BrowserWindow | null = null
 

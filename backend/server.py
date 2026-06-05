@@ -205,6 +205,10 @@ def init_engines():
     """初始化 ASR、翻译、纠错引擎"""
     global asr_engine, translator, corrector
 
+    # 国内用户使用 HuggingFace 镜像
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    print(f"HF_ENDPOINT: {os.environ.get('HF_ENDPOINT')}")
+
     print("Initializing ASR engine...")
     asr_engine = ASREngine()
 

@@ -1,7 +1,10 @@
 // 音频捕获模块 - 使用 electron-audio-loopback 捕获系统音频
 // 注意: electron-audio-loopback 是 native 模块,需要正确安装
 
+/// <reference types="ws" />
+
 import { ipcMain } from 'electron'
+import type { WebSocket } from 'ws'
 
 let isCapturing = false
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

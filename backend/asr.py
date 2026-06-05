@@ -2,8 +2,12 @@
 ASR 引擎 - 基于 faster-whisper 的流式语音识别
 """
 
+import os
 import numpy as np
 from faster_whisper import WhisperModel
+
+# 国内用户使用 HuggingFace 镜像
+HF_MIRROR = "https://hf-mirror.com"
 
 
 class ASREngine:
@@ -11,7 +15,7 @@ class ASREngine:
 
     def __init__(
         self,
-        model_size: str = "large-v3-turbo",
+        model_size: str = "base",
         device: str = "auto",
         compute_type: str = "auto"
     ):
@@ -35,6 +39,10 @@ class ASREngine:
             compute_type = "float16" if device == "cuda" else "int8"
 
         print(f"Loading Whisper model: {model_size} on {device} ({compute_type})")
+
+        # 设置 HuggingFace 镜像 (国内网络无法直连 huggingface.co)
+        os.environ.setdefault("HF_ENDPOINT", HF_MIRROR)
+        print(f"Using HuggingFace endpoint: {os.environ.get('HF_ENDPOINT')}")
 
         self.model = WhisperModel(
             model_size,

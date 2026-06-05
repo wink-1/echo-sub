@@ -34,7 +34,17 @@ export async function startPythonBackend(): Promise<void> {
   pythonProcess = spawn(pythonPath, [join(backendDir, 'server.py')], {
     cwd: backendDir,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, PORT: String(BACKEND_PORT) }
+    env: {
+      ...process.env,
+      PORT: String(BACKEND_PORT),
+      HF_ENDPOINT: 'https://hf-mirror.com',
+      // 清除代理设置，避免本地代理拦截 HuggingFace 镜像连接
+      http_proxy: '',
+      https_proxy: '',
+      HTTP_PROXY: '',
+      HTTPS_PROXY: '',
+      ALL_PROXY: ''
+    }
   })
 
   pythonProcess.stdout?.on('data', (data: Buffer) => {
@@ -127,10 +137,24 @@ export function sendToBackend(message: Record<string, unknown>): void {
 
 /**
  * 查找可用的 Python 可执行文件
+ * 优先使用 backend/venv/bin/python3 (用户安装的依赖都在这里面)
  */
 function findPython(): string {
-  const candidates = ['python3', 'python']
-  // 优先使用 managed Python
-  const managedPython = '/Users/wink/.workbuddy/binaries/python/envs/default/bin/python3'
-  return managedPython
+  const backendDir = join(__dirname, '../../backend')
+  const venvPython = join(backendDir, 'venv/bin/python3')
+
+  // 检查 venv 是否存在
+  try {
+    const fs = require('fs')
+    if (fs.existsSync(venvPython)) {
+      console.log('Using venv Python:', venvPython)
+      return venvPython
+    }
+  } catch {
+    // 忽略错误
+  }
+
+  // 降级到系统 python3
+  console.log('Using system Python: python3')
+  return 'python3'
 }
