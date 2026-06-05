@@ -62,10 +62,13 @@ class Translator:
         )
 
         try:
+            print(f"[Translator] Calling Ollama ({self.model}) for: '{text[:50]}...'")
             response = await self._call_ollama(prompt)
-            return response.strip()
+            result = response.strip()
+            print(f"[Translator] Result: '{result[:50]}...'")
+            return result
         except Exception as e:
-            print(f"Translation error: {e}")
+            print(f"[Translator] Error: {e}")
             return text  # 翻译失败返回原文
 
     async def _call_ollama(self, prompt: str) -> str:

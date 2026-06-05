@@ -38,6 +38,9 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     await send_status(websocket, "connected", "Backend connected")
 
+    packet_count = 0
+    last_log_time = 0
+
     try:
         while True:
             # 同时接收文本帧 (JSON 控制消息) 和二进制帧 (PCM 音频)
@@ -48,6 +51,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 try:
                     msg = json.loads(message["text"])
                     if isinstance(msg, dict) and "type" in msg:
+                        print(f"[WS] Control message: {msg['type']}")
                         await handle_control_message(websocket, msg)
                 except (json.JSONDecodeError, KeyError):
                     pass
@@ -59,6 +63,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 # 未知帧类型,跳过
                 continue
 
+            packet_count += 1
+            now = asyncio.get_event_loop().time()
+            if now - last_log_time > 5:
+                print(f"[WS] Received {packet_count} audio packets so far")
+                last_log_time = now
+
             # 处理音频数据
             if asr_engine is None:
                 await send_error(websocket, "ASR engine not initialized")
@@ -68,7 +78,13 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_data = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
 
             if len(audio_data) == 0:
+                print("[WS] Empty audio packet, skipping")
                 continue
+
+            # 检查音频电平 (帮助判断是否有声音)
+            audio_level = np.abs(audio_data).mean()
+            if packet_count <= 5 or packet_count % 40 == 0:
+                print(f"[WS] Packet #{packet_count}: {len(audio_data)} samples, audio level={audio_level:.4f}")
 
             # ASR 识别
             segments, info = asr_engine.transcribe_chunk(audio_data)
@@ -77,6 +93,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 source_text = segment.text.strip()
                 if not source_text:
                     continue
+
+                print(f"[WS] ASR result: '{source_text}' (lang={info.language})")
 
                 # 发送 ASR 结果
                 await websocket.send_json({
@@ -90,9 +108,11 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 # 翻译
                 if translator:
+                    print(f"[WS] Translating: '{source_text}'")
                     translated = await translator.translate(
                         source_text, info.language, "zh"
                     )
+                    print(f"[WS] Translation: '{translated}'")
 
                     # 发送翻译结果
                     segment_id = f"seg-{len(segment_history)}"

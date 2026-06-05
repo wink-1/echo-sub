@@ -54,6 +54,7 @@ class ASREngine:
         self.audio_buffer = np.array([], dtype=np.float32)
         self.min_chunk_size = 16000 * 2  # 至少 2 秒音频
         self.sample_rate = 16000
+        self.total_audio_processed = 0
 
         print(f"ASR engine ready: {model_size} on {device}")
 
@@ -69,32 +70,51 @@ class ASREngine:
         """
         # 累积到缓冲区
         self.audio_buffer = np.concatenate([self.audio_buffer, audio])
+        buffer_len = len(self.audio_buffer)
 
         # 缓冲区不足,等待更多音频
-        if len(self.audio_buffer) < self.min_chunk_size:
+        if buffer_len < self.min_chunk_size:
             return [], type("Info", (), {"language": "en"})()
 
         # 取出缓冲区内容
         audio_to_process = self.audio_buffer
         self.audio_buffer = np.array([], dtype=np.float32)
+        self.total_audio_processed += len(audio_to_process)
 
-        # 执行转录
-        segments, info = self.model.transcribe(
-            audio_to_process,
-            beam_size=5,
-            vad_filter=True,
-            vad_parameters=dict(
-                min_silence_duration_ms=500,
-                speech_pad_ms=200
-            ),
-            condition_on_previous_text=True
-        )
+        print(f"[ASR] Processing {len(audio_to_process)} samples ({len(audio_to_process)/16000:.1f}s), total: {self.total_audio_processed/16000:.1f}s")
 
-        # 转换为列表
-        segments_list = list(segments)
+        try:
+            # 执行转录
+            segments, info = self.model.transcribe(
+                audio_to_process,
+                beam_size=5,
+                vad_filter=True,
+                vad_parameters=dict(
+                    min_silence_duration_ms=500,
+                    speech_pad_ms=200
+                ),
+                condition_on_previous_text=True
+            )
 
-        return segments_list, info
+            # 转换为列表 (必须消费 generator 否则不会执行)
+            segments_list = list(segments)
+
+            if segments_list:
+                print(f"[ASR] Detected {len(segments_list)} segments, lang={info.language}, prob={info.language_probability:.2f}")
+                for i, seg in enumerate(segments_list):
+                    print(f"[ASR] Segment {i}: '{seg.text.strip()}'")
+            else:
+                print(f"[ASR] No speech detected in this chunk (lang={info.language})")
+
+            return segments_list, info
+
+        except Exception as e:
+            print(f"[ASR] Transcription error: {e}")
+            import traceback
+            traceback.print_exc()
+            return [], type("Info", (), {"language": "en"})()
 
     def reset(self):
         """重置缓冲区"""
         self.audio_buffer = np.array([], dtype=np.float32)
+        print("[ASR] Buffer reset")
