@@ -78,8 +78,8 @@ export async function startPythonBackend(): Promise<void> {
  * 连接到 Python 后端 WebSocket
  */
 async function connectWebSocket(): Promise<void> {
-  // 模型已预下载到缓存，服务器启动很快
-  const maxRetries = 20
+  // 模型已预下载到缓存，但加载仍可能需要一些时间
+  const maxRetries = 30
   const retryDelay = 1000
 
   for (let i = 0; i < maxRetries; i++) {

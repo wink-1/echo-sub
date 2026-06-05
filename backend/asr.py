@@ -1,6 +1,6 @@
 """
 ASR 引擎 - 基于 faster-whisper 的流式语音识别
-优化: MPS 加速 + 滑动窗口 + 1.5s chunk
+优化: MPS 加速 + 滑动窗口 + 1.5s chunk + 离线加载
 """
 
 import os
@@ -26,6 +26,14 @@ def _detect_device() -> str:
         return "cpu"
 
 
+def _model_is_cached(model_size: str) -> bool:
+    """检查模型是否已缓存到本地。"""
+    cache_dir = os.path.expanduser(
+        f"~/.cache/huggingface/hub/models--Systran--faster-whisper-{model_size}"
+    )
+    return os.path.isdir(cache_dir)
+
+
 class ASREngine:
     """faster-whisper ASR 引擎"""
 
@@ -45,14 +53,18 @@ class ASREngine:
         if compute_type == "auto":
             compute_type = "float16" if device in ("cuda", "mps") else "int8"
 
-        print(f"Loading Whisper model: {model_size} on {device} ({compute_type})")
-
-        # 设置 HuggingFace 镜像 (国内网络无法直连 huggingface.co)
-        os.environ.setdefault("HF_ENDPOINT", HF_MIRROR)
-        print(f"Using HuggingFace endpoint: {os.environ.get('HF_ENDPOINT')}")
-
         self.device = device
         self.compute_type = compute_type
+
+        # 模型若已缓存，跳过网络验证，直接离线加载（解决 hf-mirror 慢/挂起问题）
+        if _model_is_cached(model_size):
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            print(f"[ASR] Model {model_size} 已缓存，离线加载中...")
+        else:
+            os.environ.setdefault("HF_ENDPOINT", HF_MIRROR)
+            print(f"[ASR] 首次加载，使用镜像 {HF_MIRROR}")
+
+        print(f"Loading Whisper model: {model_size} on {device} ({compute_type})...")
 
         # MPS 可能不被 CTranslate2 支持，失败时自动回退 CPU
         try:
