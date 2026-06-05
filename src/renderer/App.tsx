@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import ControlPanel from './components/ControlPanel'
 import SubtitleOverlay from './components/SubtitleOverlay'
 import { useTranslationStore } from './stores/translationStore'
 
 export default function App(): JSX.Element {
   const [isSubtitleMode, setIsSubtitleMode] = useState(false)
-  const { addSegment, updateSegment, correctSegment } = useTranslationStore()
+  const storeRef = useRef(useTranslationStore.getState())
 
   useEffect(() => {
     // 检测是否是字幕悬浮窗模式
@@ -14,10 +14,15 @@ export default function App(): JSX.Element {
   }, [])
 
   useEffect(() => {
-    if (!window.electronAPI) return
+    if (!window.electronAPI) {
+      console.warn('electronAPI not available')
+      return
+    }
+
+    const store = storeRef.current
 
     // 监听翻译更新
-    window.electronAPI.onTranslationUpdate((data: unknown) => {
+    const unsubUpdate = window.electronAPI.onTranslationUpdate((data: unknown) => {
       const msg = data as {
         type: string
         data: {
@@ -28,8 +33,10 @@ export default function App(): JSX.Element {
         }
       }
 
+      console.log('[App] Translation update:', msg.type, msg.data.text?.slice(0, 30))
+
       if (msg.type === 'translation_partial' || msg.type === 'asr_partial') {
-        addSegment({
+        store.addSegment({
           id: msg.data.id || `seg-${Date.now()}`,
           sourceText: msg.data.originalText || '',
           translatedText: msg.data.text,
@@ -38,7 +45,7 @@ export default function App(): JSX.Element {
           language: msg.data.language || 'en'
         })
       } else if (msg.type === 'translation_final' || msg.type === 'asr_final') {
-        updateSegment(msg.data.id || `seg-${Date.now()}`, {
+        store.updateSegment(msg.data.id || `seg-${Date.now()}`, {
           sourceText: msg.data.originalText || '',
           translatedText: msg.data.text,
           status: 'confirmed'
@@ -47,7 +54,7 @@ export default function App(): JSX.Element {
     })
 
     // 监听翻译纠错
-    window.electronAPI.onTranslationCorrection((data: unknown) => {
+    const unsubCorrection = window.electronAPI.onTranslationCorrection((data: unknown) => {
       const msg = data as {
         data: {
           id?: string
@@ -56,15 +63,20 @@ export default function App(): JSX.Element {
         }
       }
       if (msg.data.changed) {
-        correctSegment(msg.data.id || '', msg.data.correctedText)
+        store.correctSegment(msg.data.id || '', msg.data.correctedText)
       }
     })
 
     // 监听后端状态
-    window.electronAPI.onBackendStatus((status: string) => {
-      console.log('Backend status:', status)
+    const unsubStatus = window.electronAPI.onBackendStatus((status: string) => {
+      console.log('[App] Backend status:', status)
     })
-  }, [addSegment, updateSegment, correctSegment])
+
+    return () => {
+      // zustand 的 IPC 监听无法取消,但组件卸载时不需要处理
+      console.log('[App] Cleanup listeners')
+    }
+  }, [])
 
   if (isSubtitleMode) {
     return <SubtitleOverlay />

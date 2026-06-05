@@ -46,8 +46,17 @@ async def websocket_endpoint(websocket: WebSocket):
             # 同时接收文本帧 (JSON 控制消息) 和二进制帧 (PCM 音频)
             message = await websocket.receive()
 
-            if message["type"] == "text":
-                # JSON 控制消息
+            # 处理断开连接
+            if message["type"] == "websocket.disconnect":
+                print("[WS] Client disconnected")
+                break
+
+            # 跳过非消息类型
+            if message["type"] != "websocket.receive":
+                continue
+
+            # JSON 控制消息 (text frame)
+            if "text" in message:
                 try:
                     msg = json.loads(message["text"])
                     if isinstance(msg, dict) and "type" in msg:
@@ -57,10 +66,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     pass
                 continue
 
-            if message["type"] == "bytes":
+            # PCM 音频数据 (binary frame)
+            if "bytes" in message:
                 data = message["bytes"]
             else:
-                # 未知帧类型,跳过
+                # 空消息,跳过
                 continue
 
             packet_count += 1

@@ -38,6 +38,7 @@ export async function startPythonBackend(): Promise<void> {
       ...process.env,
       PORT: String(BACKEND_PORT),
       HF_ENDPOINT: 'https://hf-mirror.com',
+      PYTHONUNBUFFERED: '1',  // Python 日志实时输出,不缓冲
       // 清除代理设置，避免本地代理拦截 HuggingFace 镜像连接
       http_proxy: '',
       https_proxy: '',

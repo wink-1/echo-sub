@@ -51,14 +51,19 @@ export function isAudioCapturing(): boolean {
  */
 export function registerAudioIpcHandlers(): void {
   ipcMain.on('audio-pcm-data', (_event, data: ArrayBuffer) => {
-    if (!isCapturing) return
+    if (!isCapturing) {
+      // console.log('Audio IPC: not capturing, dropping packet')
+      return
+    }
 
     if (!wsConnection) {
-      return // WebSocket 未连接, 丢弃音频数据
+      console.log('Audio IPC: WebSocket not connected, dropping packet')
+      return
     }
 
     if (wsConnection.readyState !== 1) { // WebSocket.OPEN = 1
-      return // 连接未就绪, 丢弃
+      console.log(`Audio IPC: WebSocket not open (state=${wsConnection.readyState}), dropping packet`)
+      return
     }
 
     try {
