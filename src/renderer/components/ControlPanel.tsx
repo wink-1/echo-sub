@@ -98,53 +98,48 @@ export default function ControlPanel(): JSX.Element {
   const startSystemAudio = async () => {
     setStatus('connecting')
     setErrorMsg('')
+    let source: 'system' | 'microphone' = 'microphone'
 
     try {
       const sourceId = await window.electronAPI?.getSystemAudioSource()
-      if (!sourceId) {
-        throw new Error('无法获取系统音频源。\n请确保已授予屏幕录制权限（系统设置 > 隐私与安全性 > 屏幕录制）')
-      }
+      if (!sourceId) throw new Error('无可用音频源')
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          mandatory: {
-            chromeMediaSource: 'desktop',
-            chromeMediaSourceId: sourceId
-          }
+          mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId }
         } as unknown as MediaTrackConstraints,
         video: {
-          mandatory: {
-            chromeMediaSource: 'desktop',
-            chromeMediaSourceId: sourceId,
-            maxWidth: 1,
-            maxHeight: 1
-          }
+          mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId, maxWidth: 1, maxHeight: 1 }
         } as unknown as MediaTrackConstraints
       })
-
       stream.getVideoTracks().forEach(t => t.stop())
 
-      if (stream.getAudioTracks().length === 0) {
-        throw new Error('系统音频捕获失败：未检测到音频轨道')
-      }
-
+      if (stream.getAudioTracks().length === 0) throw new Error('无音频轨道')
+      source = 'system'
       streamRef.current = stream
-      setAudioSource('system')
-      window.electronAPI?.reportAudioSource?.('system')
+      console.log('System audio captured')
 
-      startLevelMonitor(stream)
-      const processor = new AudioPCMProcessor()
-      await processor.start(stream)
-      processorRef.current = processor
-
-      const result = await window.electronAPI?.startCapture()
-      if (result?.success !== false) {
-        setIsCapturing(true)
-        setStatus('running')
-      }
     } catch (err) {
-      setStatus('error')
-      setErrorMsg(`系统音频捕获失败: ${err instanceof Error ? err.message : String(err)}\n\n请确认：\n1. 系统设置 > 隐私与安全性 > 屏幕录制 中已授权 EchoSub\n2. 有音频正在播放\n\n如无法使用系统音频，可点击下方"使用麦克风"按钮。`)
+      // 降级到麦克风
+      console.warn('System audio failed, falling back to mic:', err)
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      })
+      streamRef.current = micStream
+    }
+
+    setAudioSource(source)
+    window.electronAPI?.reportAudioSource?.(source)
+
+    startLevelMonitor(streamRef.current!)
+    const processor = new AudioPCMProcessor()
+    await processor.start(streamRef.current!)
+    processorRef.current = processor
+
+    const result = await window.electronAPI?.startCapture()
+    if (result?.success !== false) {
+      setIsCapturing(true)
+      setStatus('running')
     }
   }
 
