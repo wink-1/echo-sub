@@ -2,45 +2,54 @@ import { contextBridge, ipcRenderer, desktopCapturer } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
 
 const electronAPI = {
-  onStartCapture: (callback: () => void) =>
-    ipcRenderer.on(IPC_CHANNELS.START_CAPTURE, () => callback()),
-  onStopCapture: (callback: () => void) =>
-    ipcRenderer.on(IPC_CHANNELS.STOP_CAPTURE, () => callback()),
+  onStartCapture: (callback: () => void) => {
+    const handler = () => callback()
+    ipcRenderer.on(IPC_CHANNELS.START_CAPTURE, handler)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.START_CAPTURE, handler)
+  },
+  onStopCapture: (callback: () => void) => {
+    const handler = () => callback()
+    ipcRenderer.on(IPC_CHANNELS.STOP_CAPTURE, handler)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.STOP_CAPTURE, handler)
+  },
   startCapture: () => ipcRenderer.invoke(IPC_CHANNELS.START_CAPTURE),
   stopCapture: () => ipcRenderer.invoke(IPC_CHANNELS.STOP_CAPTURE),
   updateSettings: (settings: Record<string, unknown>) =>
     ipcRenderer.invoke(IPC_CHANNELS.UPDATE_SETTINGS, settings),
-  onTranslationUpdate: (callback: (data: unknown) => void) =>
-    ipcRenderer.on(IPC_CHANNELS.TRANSLATION_UPDATE, (_event, data) => callback(data)),
-  onTranslationCorrection: (callback: (data: unknown) => void) =>
-    ipcRenderer.on(IPC_CHANNELS.TRANSLATION_CORRECTION, (_event, data) => callback(data)),
-  onBackendStatus: (callback: (status: string) => void) =>
-    ipcRenderer.on(IPC_CHANNELS.BACKEND_STATUS, (_event, status) => callback(status)),
+  onTranslationUpdate: (callback: (data: unknown) => void) => {
+    const handler = (_event: unknown, data: unknown) => callback(data)
+    ipcRenderer.on(IPC_CHANNELS.TRANSLATION_UPDATE, handler)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.TRANSLATION_UPDATE, handler)
+  },
+  onTranslationCorrection: (callback: (data: unknown) => void) => {
+    const handler = (_event: unknown, data: unknown) => callback(data)
+    ipcRenderer.on(IPC_CHANNELS.TRANSLATION_CORRECTION, handler)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.TRANSLATION_CORRECTION, handler)
+  },
+  onBackendStatus: (callback: (status: string) => void) => {
+    const handler = (_event: unknown, status: string) => callback(status)
+    ipcRenderer.on(IPC_CHANNELS.BACKEND_STATUS, handler)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.BACKEND_STATUS, handler)
+  },
   getSettings: () => ipcRenderer.invoke(IPC_CHANNELS.GET_SETTINGS),
 
-  // 发送 PCM 音频数据到主进程
   sendAudioPCMData: (data: Uint8Array) => {
     ipcRenderer.send('audio-pcm-data', data.buffer)
   },
 
-  // 检查是否正在捕获
   isAudioCapturing: () => ipcRenderer.invoke('is-audio-capturing'),
 
-  // 字幕悬浮窗控制
   openSubtitleWindow: () => ipcRenderer.invoke('open-subtitle-window'),
   closeSubtitleWindow: () => ipcRenderer.invoke('close-subtitle-window'),
   isSubtitleWindowOpen: () => ipcRenderer.invoke('is-subtitle-window-open'),
 
-  // 字幕窗口拖拽
   subtitleDrag: (deltaX: number, deltaY: number) =>
     ipcRenderer.invoke('subtitle-drag', deltaX, deltaY),
 
-  // 音频源上报
   reportAudioSource: (source: string) => {
     ipcRenderer.send('audio-source-changed', source)
   },
 
-  // 获取系统音频源 ID
   getSystemAudioSource: async (): Promise<string | null> => {
     try {
       const sources = await desktopCapturer.getSources({

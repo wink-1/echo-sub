@@ -6,11 +6,11 @@
 
 - 🎙️ **系统音频捕获** - 直接捕获电脑播放的音频，无需麦克风
 - 🔄 **实时ASR识别** - 基于 faster-whisper 的高精度语音转文字
-- 🌐 **实时翻译** - 基于 Ollama + Qwen2.5 的本地翻译，零费用
+- 🌐 **实时翻译** - 基于 DeepSeek API 的云端翻译，高质量
 - ✏️ **自动纠错** - 三层纠错机制：流式→确认→上下文修正
 - 📺 **悬浮字幕** - 透明置顶字幕窗口，不影响正常使用
 - 🔤 **双语显示** - 支持仅中文/双语对照模式
-- 💰 **完全免费** - 所有AI处理均在本地运行，无需API费用
+- 💰 **低成本** - 本地 ASR 免费，云端翻译按量计费
 
 ## 🛠️ 技术栈
 
@@ -21,17 +21,16 @@
 | 构建工具 | Vite + electron-vite |
 | 音频捕获 | electron-audio-loopback |
 | ASR引擎 | faster-whisper (CTranslate2) |
-| 翻译+纠错 | Ollama + Qwen2.5:7b |
+| 翻译+纠错 | DeepSeek Chat API |
 | 后端通信 | FastAPI + WebSocket |
 
 ## 📋 系统要求
 
 - **Node.js** 18+
 - **Python** 3.10+
-- **Ollama** (自动安装)
 - **GPU** (推荐, NVIDIA 8GB+ 或 Mac M芯片)
-- **内存** 16GB+ (推荐)
-- **磁盘** ~7GB (Whisper模型 + Qwen2.5模型)
+- **内存** 8GB+ (推荐)
+- **磁盘** ~2GB (Whisper small模型 ~244MB + 依赖)
 
 ## 🚀 快速开始
 

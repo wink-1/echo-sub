@@ -85,6 +85,9 @@ export default function App(): JSX.Element {
 
     return () => {
       console.log('[App] Cleanup listeners')
+      unsubUpdate()
+      unsubCorrection()
+      unsubStatus()
     }
   }, [])
 
