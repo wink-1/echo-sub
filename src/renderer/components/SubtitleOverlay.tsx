@@ -7,10 +7,14 @@ export default function SubtitleOverlay(): JSX.Element {
   const isDragging = useRef(false)
   const lastPos = useRef({ x: 0, y: 0 })
 
+  // 自动滚动到底部 - 使用 requestAnimationFrame 确保 DOM 更新完成后再滚动
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
+    const el = scrollRef.current
+    if (!el) return
+    const rafId = requestAnimationFrame(() => {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+    })
+    return () => cancelAnimationFrame(rafId)
   }, [segments])
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -91,7 +95,6 @@ export default function SubtitleOverlay(): JSX.Element {
       <div
         ref={scrollRef}
         className="flex-1 min-h-0 overflow-y-auto px-4 pb-3 pt-1.5 space-y-1.5 scrollbar-hide"
-        style={{ scrollBehavior: 'smooth' }}
       >
         {visibleSegments.map((seg) => (
           <div

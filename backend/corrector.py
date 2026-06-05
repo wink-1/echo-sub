@@ -7,7 +7,7 @@ import httpx
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"
-TIMEOUT_SECONDS = 15
+TIMEOUT_SECONDS = 60
 
 CORRECTION_PROMPT = """你是一位翻译审校专家。基于上下文检查以下翻译是否有误。
 

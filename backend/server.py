@@ -23,6 +23,9 @@ corrector: Corrector | None = None
 segment_history: list[dict] = []
 MAX_HISTORY = 20
 
+# ASR segment ID 计数器（独立于 segment_history，避免翻译延迟导致 id 冲突）
+asr_segment_counter = 0
+
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
@@ -137,7 +140,7 @@ async def asr_worker(
     websocket: WebSocket,
     stop_event: asyncio.Event,
 ):
-    global asr_engine, segment_history
+    global asr_engine, segment_history, asr_segment_counter
 
     audio_buffer = np.array([], dtype=np.float32)
     min_samples = int(16000 * ASR_CHUNK_SECONDS)
@@ -169,9 +172,11 @@ async def asr_worker(
         if segments:
             full_text = " ".join(s.text.strip() for s in segments if s.text.strip())
             if full_text:
+                # 使用当前计数器作为 partial id，让前端更新同一个 partial segment
+                partial_id = f"partial-{asr_segment_counter}"
                 await safe_send_json(websocket, {
                     "type": "asr_partial",
-                    "data": {"text": full_text, "language": info.language}
+                    "data": {"id": partial_id, "text": full_text, "language": info.language}
                 })
 
         for segment in segments:
@@ -181,8 +186,9 @@ async def asr_worker(
             if segment_history and segment_history[-1].get("source") == source_text:
                 continue
 
-            seg_id = f"seg-{len(segment_history)}"
-            print(f"[ASR Worker] {source_text} (lang={info.language})")
+            seg_id = f"seg-{asr_segment_counter}"
+            asr_segment_counter += 1
+            print(f"[ASR Worker] {source_text} (lang={info.language}, id={seg_id})")
 
             await safe_send_json(websocket, {
                 "type": "asr_final",
@@ -242,10 +248,12 @@ async def translation_worker(
                 segment_history.pop(0)
 
             if corrector and ws_active:
-                asyncio.create_task(run_correction(websocket, sid, src, translated))
+                asyncio.create_task(run_correction(websocket, sid, src, accumulated))
 
         except Exception as e:
-            print(f"[Trans Worker] Error: {e}")
+            print(f"[Trans Worker] Error translating '{src[:50]}': {e}")
+            import traceback
+            traceback.print_exc()
 
 
 # ---- Helpers ----

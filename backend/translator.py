@@ -10,7 +10,7 @@ from typing import AsyncGenerator
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"
-TIMEOUT_SECONDS = 15
+TIMEOUT_SECONDS = 60
 
 # 针对同声传译场景优化的翻译 Prompt
 TRANSLATION_PROMPT = """你是一位资深同声传译员，正在为国际会议提供实时翻译。
@@ -173,8 +173,23 @@ class Translator:
             self._add_context(text, accumulated)
             print(f"[Translator Stream] '{text[:40]}' -> '{accumulated[:40]}'")
 
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            err_body = ""
+            try:
+                err_body = e.response.text[:200]
+            except Exception:
+                pass
+            print(f"[Translator Stream] HTTP {status} error: {err_body}")
+            if status == 401:
+                print("[Translator Stream] ⚠️ API Key 无效或已过期，请检查 .env 中的 DEEPSEEK_API_KEY")
+            elif status == 429:
+                print("[Translator Stream] ⚠️ API 请求频率过高，请稍后重试")
+            yield accumulated or text
         except Exception as e:
-            print(f"[Translator Stream] Error: {e}")
+            print(f"[Translator Stream] Error: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
             yield accumulated or text
 
     async def _call_deepseek(self, prompt: str) -> str:
