@@ -145,6 +145,9 @@ class ASREngine:
                 audio_to_process,
                 beam_size=10,
                 best_of=5,
+                patience=2,
+                temperature=0.0,
+                compression_ratio_threshold=2.4,
                 vad_filter=True,
                 vad_parameters=dict(
                     min_silence_duration_ms=500,
@@ -153,6 +156,7 @@ class ASREngine:
                 ),
                 condition_on_previous_text=True,
                 without_timestamps=True,
+                suppress_blank=True,
                 language=None,
                 task="transcribe",
             )
@@ -190,6 +194,9 @@ class ASREngine:
                 audio,
                 beam_size=10,
                 best_of=5,
+                patience=2,
+                temperature=0.0,
+                compression_ratio_threshold=2.4,
                 vad_filter=True,
                 vad_parameters=dict(
                     min_silence_duration_ms=500,
@@ -198,6 +205,7 @@ class ASREngine:
                 ),
                 condition_on_previous_text=True,
                 without_timestamps=True,
+                suppress_blank=True,
                 language=self.forced_language,
                 task="transcribe",
             )
