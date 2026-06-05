@@ -67,14 +67,27 @@ export default function ControlPanel(): JSX.Element {
       try {
         let stream: MediaStream
 
-        // 尝试使用 electron-audio-loopback 获取系统音频
+        // 尝试使用系统音频 (桌面音频捕获)
         try {
-          const { getLoopbackAudioMediaStream } = await import('electron-audio-loopback')
-          stream = await getLoopbackAudioMediaStream()
-          console.log('System audio loopback captured')
-        } catch {
+          const sourceId = await window.electronAPI?.getSystemAudioSource()
+          if (sourceId) {
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                mandatory: {
+                  chromeMediaSource: 'desktop',
+                  chromeMediaSourceId: sourceId
+                }
+              } as unknown as MediaTrackConstraints,
+              video: false
+            })
+            console.log('System audio captured via desktopCapturer')
+          } else {
+            throw new Error('No system audio source available')
+          }
+        } catch (loopbackErr) {
+          console.warn('System audio capture failed:', loopbackErr)
           // 降级到麦克风输入
-          console.warn('Loopback not available, falling back to microphone')
+          console.log('Falling back to microphone...')
           stream = await navigator.mediaDevices.getUserMedia({
             audio: {
               channelCount: 1,
@@ -83,6 +96,7 @@ export default function ControlPanel(): JSX.Element {
               noiseSuppression: true
             }
           })
+          console.log('Microphone captured')
         }
 
         streamRef.current = stream
@@ -92,6 +106,7 @@ export default function ControlPanel(): JSX.Element {
         await processor.start(stream)
         processorRef.current = processor
 
+        // 通知主进程后端开始接收音频
         const result = await window.electronAPI?.startCapture()
         if (result?.success !== false) {
           setIsCapturing(true)

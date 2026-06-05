@@ -1,22 +1,21 @@
-import { AppSettings, BackendMessage } from './shared/types'
-
-export interface ElectronAPI {
-  onStartCapture: (callback: () => void) => void
-  onStopCapture: (callback: () => void) => void
-  startCapture: () => Promise<{ success: boolean }>
-  stopCapture: () => Promise<{ success: boolean }>
-  updateSettings: (settings: Partial<AppSettings>) => Promise<AppSettings>
-  onTranslationUpdate: (callback: (data: unknown) => void) => void
-  onTranslationCorrection: (callback: (data: unknown) => void) => void
-  onBackendStatus: (callback: (status: string) => void) => void
-  getSettings: () => Promise<AppSettings>
-  sendAudioPCMData: (data: ArrayBuffer) => void
-  isAudioCapturing: () => Promise<boolean>
-}
+import { IPC_CHANNELS } from '../shared/types'
 
 declare global {
   interface Window {
-    electronAPI: ElectronAPI
+    electronAPI: {
+      onStartCapture: (callback: () => void) => void
+      onStopCapture: (callback: () => void) => void
+      startCapture: () => Promise<{ success: boolean }>
+      stopCapture: () => Promise<{ success: boolean }>
+      updateSettings: (settings: Record<string, unknown>) => Promise<unknown>
+      onTranslationUpdate: (callback: (data: unknown) => void) => void
+      onTranslationCorrection: (callback: (data: unknown) => void) => void
+      onBackendStatus: (callback: (status: string) => void) => void
+      getSettings: () => Promise<unknown>
+      sendAudioPCMData: (data: ArrayBuffer | Buffer) => void
+      isAudioCapturing: () => Promise<boolean>
+      getSystemAudioSource: () => Promise<string | null>
+    }
   }
 }
 

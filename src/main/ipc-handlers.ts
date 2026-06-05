@@ -52,31 +52,45 @@ export function registerIpcHandlers(
 }
 
 /**
+ * 广播消息到所有窗口 (主窗口 + 字幕窗口)
+ */
+function broadcastToWindows(msg: BackendMessage): void {
+  const { BrowserWindow } = require('electron')
+  const windows = BrowserWindow.getAllWindows()
+  for (const win of windows) {
+    if (!win.isDestroyed()) {
+      win.webContents.send(IPC_CHANNELS.TRANSLATION_UPDATE, msg)
+    }
+  }
+}
+
+/**
  * 处理来自 Python 后端的消息
  */
 function handleBackendMessage(msg: BackendMessage, subtitleWindow: BrowserWindow | null): void {
   switch (msg.type) {
     case 'asr_partial':
     case 'asr_final':
-      // ASR 识别结果 - 转发到渲染进程
-      if (subtitleWindow && !subtitleWindow.isDestroyed()) {
-        subtitleWindow.webContents.send(IPC_CHANNELS.TRANSLATION_UPDATE, msg)
-      }
+      // ASR 识别结果 - 广播到所有窗口
+      broadcastToWindows(msg)
       break
 
     case 'translation_partial':
-      // 流式翻译 - 半透明显示
+      // 流式翻译 - 半透明显示 + 广播到主窗口
       updateSubtitleContent(msg.data.text, msg.data.originalText || '', 'partial')
+      broadcastToWindows(msg)
       break
 
     case 'translation_final':
-      // 确认翻译 - 实心显示
+      // 确认翻译 - 实心显示 + 广播到主窗口
       updateSubtitleContent(msg.data.text, msg.data.originalText || '', 'confirmed')
+      broadcastToWindows(msg)
       break
 
     case 'correction':
-      // 纠错 - 高亮显示
+      // 纠错 - 高亮显示 + 广播到主窗口
       updateSubtitleContent(msg.data.correctedText || msg.data.text, msg.data.originalText || '', 'corrected')
+      broadcastToWindows(msg)
       break
 
     case 'status':

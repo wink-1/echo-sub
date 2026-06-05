@@ -10,7 +10,7 @@ import { setWebSocketConnection } from './audio-capture'
 let pythonProcess: ChildProcess | null = null
 let wsClient: WebSocket | null = null
 const BACKEND_PORT = 8765
-const WS_URL = `ws://localhost:${BACKEND_PORT}`
+const WS_URL = `ws://localhost:${BACKEND_PORT}/ws`
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let messageCallback: ((msg: BackendMessage) => void) | null = null

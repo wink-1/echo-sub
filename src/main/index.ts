@@ -45,16 +45,6 @@ function createMainWindow(): BrowserWindow {
 }
 
 app.whenReady().then(async () => {
-  // 初始化 electron-audio-loopback (注册 IPC handler)
-  try {
-    const { initMain } = await import('electron-audio-loopback')
-    initMain()
-    console.log('electron-audio-loopback initialized')
-  } catch (err) {
-    console.warn('Failed to initialize electron-audio-loopback:', err)
-    console.warn('System audio capture will not be available')
-  }
-
   // 注册音频 PCM 数据转发 IPC
   registerAudioIpcHandlers()
 
