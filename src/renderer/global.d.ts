@@ -1,5 +1,3 @@
-import { IPC_CHANNELS } from '../shared/types'
-
 declare global {
   interface Window {
     electronAPI: {
@@ -12,7 +10,7 @@ declare global {
       onTranslationCorrection: (callback: (data: unknown) => void) => void
       onBackendStatus: (callback: (status: string) => void) => void
       getSettings: () => Promise<unknown>
-      sendAudioPCMData: (data: ArrayBuffer | Buffer) => void
+      sendAudioPCMData: (data: Uint8Array) => void
       isAudioCapturing: () => Promise<boolean>
       getSystemAudioSource: () => Promise<string | null>
     }

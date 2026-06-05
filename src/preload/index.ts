@@ -19,8 +19,10 @@ const electronAPI = {
   getSettings: () => ipcRenderer.invoke(IPC_CHANNELS.GET_SETTINGS),
 
   // 发送 PCM 音频数据到主进程 (用于转发给 Python 后端)
-  sendAudioPCMData: (data: ArrayBuffer | Buffer) =>
-    ipcRenderer.send('audio-pcm-data', data),
+  // 使用 Uint8Array 包装确保 IPC 序列化正确
+  sendAudioPCMData: (data: Uint8Array) => {
+    ipcRenderer.send('audio-pcm-data', data.buffer)
+  },
 
   // 检查是否正在捕获
   isAudioCapturing: () => ipcRenderer.invoke('is-audio-capturing'),
@@ -33,15 +35,13 @@ const electronAPI = {
         types: ['screen'],
         thumbnailSize: { width: 0, height: 0 }
       })
-      const screenSource = sources.find(s => s.name === 'Entire Screen' || s.name === 'Screen 1')
-      if (screenSource) {
-        console.log('[preload] Got screen audio source:', screenSource.id)
-        return screenSource.id
-      }
-      // fallback: 返回第一个屏幕源
       if (sources.length > 0) {
-        console.log('[preload] Got first screen source:', sources[0].id)
-        return sources[0].id
+        // 优先选择 Entire Screen / Screen 1
+        const screenSource = sources.find(s =>
+          s.name === 'Entire Screen' || s.name === 'Screen 1'
+        ) || sources[0]
+        console.log('[preload] Got screen source:', screenSource.id, screenSource.name)
+        return screenSource.id
       }
       return null
     } catch (err) {

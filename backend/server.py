@@ -40,16 +40,24 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            data = await websocket.receive_bytes()
+            # 同时接收文本帧 (JSON 控制消息) 和二进制帧 (PCM 音频)
+            message = await websocket.receive()
 
-            # 检查是否是 JSON 控制消息
-            try:
-                msg = json.loads(data.decode("utf-8"))
-                if isinstance(msg, dict) and "type" in msg:
-                    await handle_control_message(websocket, msg)
-                    continue
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                pass
+            if message["type"] == "text":
+                # JSON 控制消息
+                try:
+                    msg = json.loads(message["text"])
+                    if isinstance(msg, dict) and "type" in msg:
+                        await handle_control_message(websocket, msg)
+                except (json.JSONDecodeError, KeyError):
+                    pass
+                continue
+
+            if message["type"] == "bytes":
+                data = message["bytes"]
+            else:
+                # 未知帧类型,跳过
+                continue
 
             # 处理音频数据
             if asr_engine is None:

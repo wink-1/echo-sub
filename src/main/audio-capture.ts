@@ -6,11 +6,17 @@ import type { WebSocket } from 'ws'
 let isCapturing = false
 let wsConnection: WebSocket | null = null
 
+// 统计发送的音频包
+let packetsSent = 0
+let lastLogTime = 0
+
 /**
  * 设置 WebSocket 连接引用, 用于发送音频数据
  */
 export function setWebSocketConnection(ws: WebSocket): void {
   wsConnection = ws
+  packetsSent = 0
+  console.log('Audio capture: WebSocket connection set')
 }
 
 /**
@@ -20,6 +26,7 @@ export async function startAudioCapture(): Promise<boolean> {
   if (isCapturing) return true
 
   isCapturing = true
+  packetsSent = 0
   console.log('Audio capture started (renderer-driven)')
   return true
 }
@@ -29,7 +36,7 @@ export async function startAudioCapture(): Promise<boolean> {
  */
 export function stopAudioCapture(): void {
   isCapturing = false
-  console.log('Audio capture stopped')
+  console.log(`Audio capture stopped (sent ${packetsSent} packets total)`)
 }
 
 /**
@@ -43,9 +50,31 @@ export function isAudioCapturing(): boolean {
  * 注册 IPC handler: 接收渲染进程发来的 PCM 音频数据, 转发给 Python 后端
  */
 export function registerAudioIpcHandlers(): void {
-  ipcMain.on('audio-pcm-data', (_event, data: Buffer) => {
-    if (wsConnection && wsConnection.readyState === 1) { // WebSocket.OPEN = 1
-      wsConnection.send(data)
+  ipcMain.on('audio-pcm-data', (_event, data: ArrayBuffer) => {
+    if (!isCapturing) return
+
+    if (!wsConnection) {
+      return // WebSocket 未连接, 丢弃音频数据
+    }
+
+    if (wsConnection.readyState !== 1) { // WebSocket.OPEN = 1
+      return // 连接未就绪, 丢弃
+    }
+
+    try {
+      // data 从渲染进程传过来是 ArrayBuffer
+      const buffer = Buffer.from(data)
+      wsConnection.send(buffer)
+      packetsSent++
+
+      // 每 5 秒输出一次统计
+      const now = Date.now()
+      if (now - lastLogTime > 5000) {
+        console.log(`Audio: ${packetsSent} packets sent to backend (${buffer.length} bytes/packet)`)
+        lastLogTime = now
+      }
+    } catch (err) {
+      console.error('Failed to send audio data to backend:', err)
     }
   })
 
