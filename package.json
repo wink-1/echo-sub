@@ -1,0 +1,33 @@
+{
+  "name": "echo-sub",
+  "version": "0.1.0",
+  "description": "AI同声传译助手 - 实时外语字幕,自动纠错",
+  "main": "./out/main/index.js",
+  "author": "EchoSub",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "electron-audio-loopback": "^1.0.0",
+    "ws": "^8.18.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "autoprefixer": "^10.4.20",
+    "electron": "^31.7.0",
+    "electron-builder": "^25.1.0",
+    "electron-vite": "^2.3.0",
+    "postcss": "^8.4.49",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.0"
+  }
+}
