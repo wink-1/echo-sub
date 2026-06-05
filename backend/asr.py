@@ -89,8 +89,8 @@ class ASREngine:
         # 音频缓冲区 (累积音频直到有足够数据)
         self.audio_buffer = np.array([], dtype=np.float32)
         self.sample_rate = 16000
-        self.min_chunk_size = int(self.sample_rate * 0.8)  # 0.8s (队列管线使用，降低首字延迟)
-        self.overlap_seconds = 0.3  # 滑动窗口重叠
+        self.min_chunk_size = int(self.sample_rate * 5.0)  # 5s 最小 chunk，需要足够上下文
+        self.overlap_seconds = 1.0  # 1s 重叠保留上下文
         self.total_audio_processed = 0
         self.forced_language = None  # None=auto, 'en'/'ja' 等强制语言
 
@@ -143,18 +143,18 @@ class ASREngine:
         try:
             segments, info = self.model.transcribe(
                 audio_to_process,
-                beam_size=5,
+                beam_size=10,
+                best_of=5,
                 vad_filter=True,
                 vad_parameters=dict(
-                    min_silence_duration_ms=300,
+                    min_silence_duration_ms=500,
                     speech_pad_ms=200,
                     threshold=0.3,
                 ),
-                condition_on_previous_text=False,
+                condition_on_previous_text=True,
+                without_timestamps=True,
                 language=None,
                 task="transcribe",
-                no_speech_threshold=0.6,
-                log_prob_threshold=-1.0,
             )
 
             segments_list = list(segments)
@@ -188,18 +188,18 @@ class ASREngine:
         try:
             segments, info = self.model.transcribe(
                 audio,
-                beam_size=5,
+                beam_size=10,
+                best_of=5,
                 vad_filter=True,
                 vad_parameters=dict(
-                    min_silence_duration_ms=200,
-                    speech_pad_ms=120,
+                    min_silence_duration_ms=500,
+                    speech_pad_ms=200,
                     threshold=0.3,
                 ),
-                condition_on_previous_text=False,
+                condition_on_previous_text=True,
+                without_timestamps=True,
                 language=self.forced_language,
                 task="transcribe",
-                no_speech_threshold=0.6,
-                log_prob_threshold=-1.0,
             )
             return list(segments), info
         except Exception as e:

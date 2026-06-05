@@ -34,8 +34,8 @@ ASR_MODEL = os.environ.get("ASR_MODEL", "small")
 ws_active = False
 
 # ASR worker 参数
-ASR_CHUNK_SECONDS = 0.8    # 每次 ASR 的最小音频长度
-ASR_OVERLAP_SECONDS = 0.3  # 滑动窗口重叠
+ASR_CHUNK_SECONDS = 5.0     # 每次 ASR 的最小音频长度（需要足够上下文才能准确识别）
+ASR_OVERLAP_SECONDS = 1.0   # 滑动窗口重叠（保留上文上下文）
 
 
 @app.websocket("/ws")
@@ -146,6 +146,9 @@ async def asr_worker(
     min_samples = int(16000 * ASR_CHUNK_SECONDS)
     overlap = int(16000 * ASR_OVERLAP_SECONDS)
 
+    # 累积已识别的文本，用于 condition_on_previous_text 模式下的增量提取
+    accumulated_text = ""
+
     while not stop_event.is_set():
         try:
             chunk = await asyncio.wait_for(audio_queue.get(), timeout=0.1)
@@ -168,31 +171,53 @@ async def asr_worker(
             print(f"[ASR Worker] Error: {e}")
             continue
 
-        # 逐个处理识别到的 segment
-        for segment in segments:
-            source_text = segment.text.strip()
-            if not source_text:
-                continue
-            if segment_history and segment_history[-1].get("source") == source_text:
-                continue
+        if not segments:
+            continue
 
-            seg_id = f"seg-{asr_segment_counter}"
-            asr_segment_counter += 1
-            print(f"[ASR Worker] {source_text} (lang={info.language}, id={seg_id})")
+        # condition_on_previous_text=True 模式下，whisper 可能返回累积文本
+        # 提取增量：当前识别结果去掉已累积的部分
+        full_text = " ".join(s.text.strip() for s in segments if s.text.strip())
+        new_text = full_text
 
-            await safe_send_json(websocket, {
-                "type": "asr_final",
-                "data": {"id": seg_id, "text": source_text, "language": info.language}
+        # 如果当前结果以已累积文本开头，只取新增部分
+        if accumulated_text and full_text.startswith(accumulated_text):
+            new_text = full_text[len(accumulated_text):].strip()
+        elif accumulated_text:
+            # 不完全匹配：尝试找到最长公共后缀/前缀
+            # 简单处理：如果当前结果包含已累积文本，取后面的
+            idx = full_text.find(accumulated_text)
+            if idx >= 0:
+                new_text = full_text[idx + len(accumulated_text):].strip()
+            else:
+                # 完全不匹配（用户跳过了内容或修正了之前的识别）
+                # 发送完整的当前结果，并重置累积
+                print(f"[ASR Worker] Text mismatch, resetting accumulation. Old: '{accumulated_text[:50]}' New: '{full_text[:50]}'")
+                accumulated_text = ""
+                new_text = full_text
+
+        if not new_text:
+            continue
+
+        # 更新累积文本
+        accumulated_text = full_text
+
+        seg_id = f"seg-{asr_segment_counter}"
+        asr_segment_counter += 1
+        print(f"[ASR Worker] {new_text} (lang={info.language}, id={seg_id}, full={full_text[:60]}...)")
+
+        await safe_send_json(websocket, {
+            "type": "asr_final",
+            "data": {"id": seg_id, "text": new_text, "language": info.language}
+        })
+
+        try:
+            translation_queue.put_nowait({
+                "segment_id": seg_id,
+                "source_text": new_text,
+                "language": info.language
             })
-
-            try:
-                translation_queue.put_nowait({
-                    "segment_id": seg_id,
-                    "source_text": source_text,
-                    "language": info.language
-                })
-            except asyncio.QueueFull:
-                print("[ASR Worker] Translation queue full")
+        except asyncio.QueueFull:
+            print("[ASR Worker] Translation queue full")
 
 
 async def translation_worker(
