@@ -1,28 +1,67 @@
 """
-翻译模块 - 通过 Ollama HTTP API 调用 Qwen2 进行翻译
+翻译模块 - DeepSeek API 翻译
+兼容 OpenAI API 格式
 """
 
+import os
 import httpx
-import json
 
-OLLAMA_BASE_URL = "http://localhost:11434"
-DEFAULT_MODEL = "qwen2.5:7b"
-TIMEOUT_SECONDS = 10
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEEPSEEK_MODEL = "deepseek-chat"
+TIMEOUT_SECONDS = 15
 
-TRANSLATION_PROMPT = """你是一个专业的同声传译员。将以下{source_lang}文本翻译成自然流畅的中文。
-只输出翻译结果，不要添加任何解释。
-保持原文的专业术语和语气。
+# 针对同声传译场景优化的翻译 Prompt
+TRANSLATION_PROMPT = """你是一位资深同声传译员，正在为国际会议提供实时翻译。
 
-原文：{text}"""
+## 规则
+1. 将以下{source_lang}文本翻译成自然流畅的中文
+2. 只输出翻译结果，绝对不要添加解释、注释或多余内容
+3. 严格忠于原文含义，不得增删、臆测或"脑补"内容
+4. 专业术语保持行业通用译法
+5. 保持原文语气（正式/口语/技术等）
+6. 如果原文不完整（如被截断的句子），也照实翻译不完整的部分
+7. 不要重复翻译同一内容
+
+## 原文
+{text}
+
+## 翻译"""
+
+TRANSLATION_PROMPT_WITH_CONTEXT = """你是一位资深同声传译员，正在为国际会议提供实时翻译。
+
+## 前文上下文
+{context}
+
+## 规则
+1. 将以下{source_lang}文本翻译成自然流畅的中文
+2. 只输出翻译结果，绝对不要添加解释、注释或多余内容
+3. 严格忠于原文含义，不得增删、臆测或"脑补"内容
+4. 结合前文上下文确保术语一致
+5. 保持原文语气
+6. 不要重复翻译同一内容
+
+## 原文
+{text}
+
+## 翻译"""
 
 
 class Translator:
-    """Ollama 翻译客户端"""
+    """DeepSeek API 翻译客户端"""
 
-    def __init__(self, model: str = DEFAULT_MODEL, base_url: str = OLLAMA_BASE_URL):
-        self.model = model
+    def __init__(
+        self,
+        api_key: str = "",
+        base_url: str = DEEPSEEK_BASE_URL,
+        model: str = DEEPSEEK_MODEL
+    ):
+        self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         self.base_url = base_url
+        self.model = model
         self.client = httpx.Client(timeout=TIMEOUT_SECONDS)
+        self.context_history: list[str] = []
+        self.MAX_CONTEXT = 3
+        print(f"[Translator] DeepSeek API: {self.model}, key={self.api_key[:8]}...")
 
     async def translate(
         self,
@@ -30,109 +69,79 @@ class Translator:
         source_lang: str = "en",
         target_lang: str = "zh"
     ) -> str:
-        """
-        翻译文本
-
-        Args:
-            text: 源语言文本
-            source_lang: 源语言代码
-            target_lang: 目标语言代码
-
-        Returns:
-            翻译后的文本
-        """
         if not text.strip():
             return ""
 
-        # 语言名称映射
         lang_names = {
-            "en": "英文",
-            "ja": "日文",
-            "ko": "韩文",
-            "fr": "法文",
-            "de": "德文",
-            "es": "西班牙文",
-            "ru": "俄文",
+            "en": "英文", "ja": "日文", "ko": "韩文",
+            "fr": "法文", "de": "德文", "es": "西班牙文",
+            "ru": "俄文", "zh": "中文",
         }
         source_lang_name = lang_names.get(source_lang, "外文")
 
-        prompt = TRANSLATION_PROMPT.format(
-            source_lang=source_lang_name,
-            text=text
-        )
+        if self.context_history:
+            context_str = "\n".join(self.context_history[-self.MAX_CONTEXT:])
+            prompt = TRANSLATION_PROMPT_WITH_CONTEXT.format(
+                source_lang=source_lang_name,
+                context=context_str,
+                text=text
+            )
+        else:
+            prompt = TRANSLATION_PROMPT.format(
+                source_lang=source_lang_name,
+                text=text
+            )
 
         try:
-            print(f"[Translator] Calling Ollama ({self.model}) for: '{text[:50]}...'")
-            response = await self._call_ollama(prompt)
-            result = response.strip()
-            print(f"[Translator] Result: '{result[:50]}...'")
+            result = await self._call_deepseek(prompt)
+            result = result.strip()
+            self._add_context(text, result)
+            print(f"[Translator] '{text[:40]}' -> '{result[:40]}'")
             return result
         except Exception as e:
             print(f"[Translator] Error: {e}")
-            return text  # 翻译失败返回原文
+            import traceback
+            traceback.print_exc()
+            return text
 
-    async def _call_ollama(self, prompt: str) -> str:
-        """调用 Ollama API"""
+    async def _call_deepseek(self, prompt: str) -> str:
         import asyncio
+
+        api_key = self.api_key
+        base_url = self.base_url
+        model = self.model
 
         def _sync_call():
             response = self.client.post(
-                f"{self.base_url}/api/chat",
+                f"{base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                },
                 json={
-                    "model": self.model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "你是一位专业的同声传译员。将外语实时翻译为中文，忠于原文，不增删内容。"
+                        },
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 512,
                     "stream": False
                 }
             )
             response.raise_for_status()
             data = response.json()
-            return data["message"]["content"]
+            return data["choices"][0]["message"]["content"]
 
-        # 在线程池中执行同步 HTTP 调用
         return await asyncio.get_event_loop().run_in_executor(None, _sync_call)
 
-    async def translate_stream(self, text: str, source_lang: str = "en") -> str:
-        """
-        流式翻译 (逐 token 输出)
+    def _add_context(self, source: str, translation: str):
+        self.context_history.append(f"原文：{source}\n译文：{translation}")
+        if len(self.context_history) > self.MAX_CONTEXT:
+            self.context_history.pop(0)
 
-        Args:
-            text: 源语言文本
-            source_lang: 源语言代码
-
-        Returns:
-            完整翻译文本
-        """
-        if not text.strip():
-            return ""
-
-        lang_names = {"en": "英文", "ja": "日文", "ko": "韩文"}
-        source_lang_name = lang_names.get(source_lang, "外文")
-
-        prompt = TRANSLATION_PROMPT.format(
-            source_lang=source_lang_name,
-            text=text
-        )
-
-        full_text = ""
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                async with client.stream(
-                    "POST",
-                    f"{self.base_url}/api/chat",
-                    json={
-                        "model": self.model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "stream": True
-                    }
-                ) as response:
-                    async for line in response.aiter_lines():
-                        if not line.strip():
-                            continue
-                        data = json.loads(line)
-                        if "message" in data and "content" in data["message"]:
-                            full_text += data["message"]["content"]
-        except Exception as e:
-            print(f"Stream translation error: {e}")
-            return text
-
-        return full_text.strip()
+    def reset_context(self):
+        self.context_history = []

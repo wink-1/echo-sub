@@ -29,11 +29,29 @@ export const useTranslationStore = create<TranslationState>((set) => ({
     }),
 
   updateSegment: (id, updates) =>
-    set((state) => ({
-      segments: state.segments.map((s) =>
-        s.id === id ? { ...s, ...updates } : s
-      )
-    })),
+    set((state) => {
+      const index = state.segments.findIndex((s) => s.id === id)
+      if (index >= 0) {
+        // 更新已有段落
+        const newSegments = [...state.segments]
+        newSegments[index] = { ...newSegments[index], ...updates }
+        return { segments: newSegments }
+      }
+      // 找不到对应段落，添加新段落
+      return {
+        segments: [
+          ...state.segments,
+          {
+            id,
+            sourceText: updates.sourceText || '',
+            translatedText: updates.translatedText || '',
+            status: updates.status || 'confirmed',
+            timestamp: Date.now(),
+            language: updates.language || 'en'
+          }
+        ].slice(-50)
+      }
+    }),
 
   correctSegment: (id, correctedText) =>
     set((state) => ({

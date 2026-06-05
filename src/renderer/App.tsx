@@ -43,11 +43,23 @@ export default function App(): JSX.Element {
           timestamp: Date.now(),
           language: msg.data.language || 'en'
         })
-      } else if (msg.type === 'translation_final' || msg.type === 'asr_final') {
+      } else if (msg.type === 'asr_final') {
+        // ASR 最终结果：显示原文，等待翻译
+        store.addSegment({
+          id: msg.data.id || `seg-${Date.now()}`,
+          sourceText: msg.data.text,
+          translatedText: msg.data.text,
+          status: 'partial',
+          timestamp: Date.now(),
+          language: msg.data.language || 'en'
+        })
+      } else if (msg.type === 'translation_final') {
+        // 翻译最终结果 - 更新对应的段落
         store.updateSegment(msg.data.id || `seg-${Date.now()}`, {
           sourceText: msg.data.originalText || '',
           translatedText: msg.data.text,
-          status: 'confirmed'
+          status: 'confirmed',
+          language: msg.data.language || 'en'
         })
       }
     })
@@ -97,7 +109,7 @@ export default function App(): JSX.Element {
           </div>
           <div className="flex items-center gap-2">
             <span className="px-2 py-1 rounded-md bg-green-500/20 text-green-400 text-xs font-medium">
-              ● 本地运行
+              ● 本地ASR + 云端AI
             </span>
           </div>
         </div>
@@ -124,6 +136,23 @@ export default function App(): JSX.Element {
           </div>
         </div>
 
+        {/* 引擎信息 */}
+        <div className="bg-gray-800/30 rounded-xl p-4 border border-gray-700/30">
+          <h3 className="text-xs font-medium text-gray-400 mb-2">引擎配置</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-gray-700/30 rounded-lg p-3">
+              <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">语音识别</div>
+              <div className="text-sm text-white font-medium">faster-whisper medium</div>
+              <div className="text-[10px] text-gray-500 mt-0.5">本地运行 · 自动检测语言</div>
+            </div>
+            <div className="bg-gray-700/30 rounded-lg p-3">
+              <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">翻译引擎</div>
+              <div className="text-sm text-white font-medium">DeepSeek Chat</div>
+              <div className="text-[10px] text-gray-500 mt-0.5">云端 API · 高质量翻译</div>
+            </div>
+          </div>
+        </div>
+
         {/* 使用说明 */}
         <div className="bg-gray-800/30 rounded-xl p-4 border border-gray-700/30">
           <h3 className="text-xs font-medium text-gray-400 mb-2">使用说明</h3>
@@ -131,14 +160,14 @@ export default function App(): JSX.Element {
             <li>点击「开始翻译」启动音频捕获</li>
             <li>系统音频捕获失败时会自动降级到麦克风</li>
             <li>首次使用需要在系统设置中授权屏幕录制权限</li>
-            <li>字幕会自动保存最近 50 条记录</li>
+            <li>字幕悬浮窗可自由拖拽移动</li>
           </ul>
         </div>
       </main>
 
       {/* 底部 */}
       <footer className="p-3 text-center text-[10px] text-gray-600 border-t border-gray-800">
-        EchoSub v0.1.0 · Powered by faster-whisper + Ollama
+        EchoSub v0.3.0 · faster-whisper medium + DeepSeek Chat
       </footer>
     </div>
   )

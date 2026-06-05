@@ -29,6 +29,9 @@ export async function startPythonBackend(): Promise<void> {
   const backendDir = join(__dirname, '../../backend')
   const pythonPath = findPython()
 
+  // 从 .env 文件读取环境变量（API Key 等敏感信息不硬编码在代码中）
+  const envOverrides = loadEnvFile(backendDir)
+
   console.log('Starting Python backend with:', pythonPath)
 
   pythonProcess = spawn(pythonPath, [join(backendDir, 'server.py')], {
@@ -36,6 +39,7 @@ export async function startPythonBackend(): Promise<void> {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
+      ...envOverrides,
       PORT: String(BACKEND_PORT),
       HF_ENDPOINT: 'https://hf-mirror.com',
       PYTHONUNBUFFERED: '1',  // Python 日志实时输出,不缓冲
@@ -69,8 +73,9 @@ export async function startPythonBackend(): Promise<void> {
  * 连接到 Python 后端 WebSocket
  */
 async function connectWebSocket(): Promise<void> {
-  const maxRetries = 10
-  const retryDelay = 1000
+  // medium 模型加载约需 30-60 秒，需要足够多的重试
+  const maxRetries = 60
+  const retryDelay = 2000
 
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -98,13 +103,24 @@ async function connectWebSocket(): Promise<void> {
       })
 
       wsClient.on('close', () => {
-        console.log('WebSocket connection closed')
+        console.log('WebSocket connection closed, attempting reconnect...')
         wsClient = null
+        // 自动重连
+        setTimeout(() => {
+          if (pythonProcess && !wsClient) {
+            console.log('[WS] Reconnecting to Python backend...')
+            connectWebSocket().catch(err => {
+              console.error('[WS] Reconnect failed:', err)
+            })
+          }
+        }, 2000)
       })
 
       return
     } catch {
-      console.log(`WebSocket connection attempt ${i + 1}/${maxRetries} failed, retrying...`)
+      if (i % 5 === 0) {
+        console.log(`WebSocket connection attempt ${i + 1}/${maxRetries}, waiting for Python backend...`)
+      }
       await new Promise((resolve) => setTimeout(resolve, retryDelay))
     }
   }
@@ -158,4 +174,53 @@ function findPython(): string {
   // 降级到系统 python3
   console.log('Using system Python: python3')
   return 'python3'
+}
+
+/**
+ * 从 .env 文件读取环境变量
+ * .env 文件在 .gitignore 中，不会被提交到 Git
+ */
+function loadEnvFile(backendDir: string): Record<string, string> {
+  const envVars: Record<string, string> = {}
+  const fs = require('fs')
+  const path = require('path')
+
+  // 查找 .env 文件：先找项目根目录，再找 backend 目录
+  const rootDir = path.resolve(backendDir, '..')
+  const envPaths = [
+    path.join(rootDir, '.env'),
+    path.join(backendDir, '.env'),
+  ]
+
+  for (const envPath of envPaths) {
+    if (fs.existsSync(envPath)) {
+      console.log(`[env] Loading: ${envPath}`)
+      const content = fs.readFileSync(envPath, 'utf-8')
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim()
+        // 跳过注释和空行
+        if (!trimmed || trimmed.startsWith('#')) continue
+        const match = trimmed.match(/^([^=]+)=(.*)$/)
+        if (match) {
+          const key = match[1].trim()
+          let value = match[2].trim()
+          // 去除引号
+          if ((value.startsWith('"') && value.endsWith('"')) ||
+              (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1)
+          }
+          envVars[key] = value
+        }
+      }
+      break  // 找到第一个 .env 就停止
+    }
+  }
+
+  if (Object.keys(envVars).length > 0) {
+    console.log(`[env] Loaded ${Object.keys(envVars).length} variables`)
+  } else {
+    console.warn('[env] No .env file found. Please create .env with DEEPSEEK_API_KEY')
+  }
+
+  return envVars
 }

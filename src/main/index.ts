@@ -14,8 +14,6 @@ const defaultSettings: AppSettings = {
   targetLanguage: 'zh',
   fontSize: 24,
   showBilingual: true,
-  asrModel: 'base',
-  translationModel: 'qwen2.5:7b',
   windowOpacity: 0.85
 }
 

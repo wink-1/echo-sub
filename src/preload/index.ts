@@ -18,8 +18,7 @@ const electronAPI = {
     ipcRenderer.on(IPC_CHANNELS.BACKEND_STATUS, (_event, status) => callback(status)),
   getSettings: () => ipcRenderer.invoke(IPC_CHANNELS.GET_SETTINGS),
 
-  // 发送 PCM 音频数据到主进程 (用于转发给 Python 后端)
-  // 使用 Uint8Array 包装确保 IPC 序列化正确
+  // 发送 PCM 音频数据到主进程
   sendAudioPCMData: (data: Uint8Array) => {
     ipcRenderer.send('audio-pcm-data', data.buffer)
   },
@@ -32,8 +31,11 @@ const electronAPI = {
   closeSubtitleWindow: () => ipcRenderer.invoke('close-subtitle-window'),
   isSubtitleWindowOpen: () => ipcRenderer.invoke('is-subtitle-window-open'),
 
-  // 获取系统音频源 ID (用于 getUserMedia 捕获桌面音频)
-  // macOS 需要屏幕录制权限
+  // 字幕窗口拖拽
+  subtitleDrag: (deltaX: number, deltaY: number) =>
+    ipcRenderer.invoke('subtitle-drag', deltaX, deltaY),
+
+  // 获取系统音频源 ID
   getSystemAudioSource: async (): Promise<string | null> => {
     try {
       const sources = await desktopCapturer.getSources({
@@ -41,7 +43,6 @@ const electronAPI = {
         thumbnailSize: { width: 0, height: 0 }
       })
       if (sources.length > 0) {
-        // 优先选择 Entire Screen / Screen 1
         const screenSource = sources.find(s =>
           s.name === 'Entire Screen' || s.name === 'Screen 1'
         ) || sources[0]

@@ -43,7 +43,6 @@ export type FrontendMessageType =
   | 'start'
   | 'stop'
   | 'set_language'
-  | 'set_model'
 
 /** 前端 WebSocket 消息 */
 export interface FrontendMessage {
@@ -51,7 +50,6 @@ export interface FrontendMessage {
   data: {
     audio?: ArrayBuffer
     language?: string
-    model?: string
   }
 }
 
@@ -61,8 +59,6 @@ export interface AppSettings {
   targetLanguage: string
   fontSize: number
   showBilingual: boolean
-  asrModel: string
-  translationModel: string
   windowOpacity: number
 }
 

@@ -1,32 +1,46 @@
 """
-纠错模块 - 基于上下文的翻译纠错
-使用 Ollama Qwen2 在段落后进行上下文感知的翻译修正
+纠错模块 - DeepSeek API 翻译审校
 """
 
+import os
 import httpx
 
-OLLAMA_BASE_URL = "http://localhost:11434"
-DEFAULT_MODEL = "qwen2.5:7b"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEEPSEEK_MODEL = "deepseek-chat"
 TIMEOUT_SECONDS = 15
 
-CORRECTION_PROMPT = """你是一个翻译审校专家。基于以下上下文，检查并修正翻译。
+CORRECTION_PROMPT = """你是一位翻译审校专家。基于上下文检查以下翻译是否有误。
 
-上下文：
+## 前文上下文
 {context}
 
-当前原文：{source_text}
-当前译文：{translation}
+## 当前原文
+{source_text}
 
-如果有明显错误，输出修正后的翻译。如果翻译正确，直接输出当前译文。
-只输出翻译结果，不要添加任何解释。"""
+## 当前译文
+{translation}
+
+## 规则
+1. 如果翻译准确无误，直接输出当前译文，不做任何修改
+2. 如果有明显翻译错误（如误译、漏译、过度翻译），输出修正后的译文
+3. 只输出翻译结果，不要添加任何解释或标注
+4. 不要做不必要的文风润色，只修正事实性错误
+
+## 修正后的译文"""
 
 
 class Corrector:
-    """翻译纠错器"""
+    """DeepSeek API 翻译纠错器"""
 
-    def __init__(self, model: str = DEFAULT_MODEL, base_url: str = OLLAMA_BASE_URL):
-        self.model = model
+    def __init__(
+        self,
+        api_key: str = "",
+        base_url: str = DEEPSEEK_BASE_URL,
+        model: str = DEEPSEEK_MODEL
+    ):
+        self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         self.base_url = base_url
+        self.model = model
         self.client = httpx.Client(timeout=TIMEOUT_SECONDS)
 
     async def correct(
@@ -35,24 +49,12 @@ class Corrector:
         current_translation: str,
         context_before: list[str] | None = None
     ) -> dict:
-        """
-        基于上下文纠错翻译
-
-        Args:
-            source_text: 源语言原文
-            current_translation: 当前翻译
-            context_before: 前几段已确认的翻译文本
-
-        Returns:
-            {"corrected": str, "changed": bool}
-        """
         if not source_text.strip() or not current_translation.strip():
             return {"corrected": current_translation, "changed": False}
 
-        # 构建上下文
-        context = ""
+        context = "（无前文）"
         if context_before:
-            context = "\n".join([f"前文译文：{t}" for t in context_before[-2:]])
+            context = "\n".join([f"前文：{t}" for t in context_before[-2:]])
 
         prompt = CORRECTION_PROMPT.format(
             context=context,
@@ -61,11 +63,12 @@ class Corrector:
         )
 
         try:
-            corrected = await self._call_ollama(prompt)
+            corrected = await self._call_deepseek(prompt)
             corrected = corrected.strip()
-
-            # 判断是否有变化
             changed = corrected != current_translation
+
+            if changed:
+                print(f"[Corrector] Corrected: '{current_translation}' -> '{corrected}'")
 
             return {"corrected": corrected, "changed": changed}
 
@@ -73,24 +76,30 @@ class Corrector:
             print(f"Correction error: {e}")
             return {"corrected": current_translation, "changed": False}
 
-    async def _call_ollama(self, prompt: str) -> str:
-        """调用 Ollama API"""
+    async def _call_deepseek(self, prompt: str) -> str:
         import asyncio
+
+        api_key = self.api_key
+        base_url = self.base_url
+        model = self.model
 
         def _sync_call():
             response = self.client.post(
-                f"{self.base_url}/api/chat",
+                f"{base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                },
                 json={
-                    "model": self.model,
+                    "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.1  # 低温度,减少不必要的修改
-                    }
+                    "temperature": 0.1,
+                    "max_tokens": 512,
+                    "stream": False
                 }
             )
             response.raise_for_status()
             data = response.json()
-            return data["message"]["content"]
+            return data["choices"][0]["message"]["content"]
 
         return await asyncio.get_event_loop().run_in_executor(None, _sync_call)

@@ -9,6 +9,14 @@ class AudioPCMProcessor {
 
   async start(stream: MediaStream): Promise<void> {
     this.audioContext = new AudioContext({ sampleRate: this.targetSampleRate })
+
+    // 确保 AudioContext 处于 running 状态 (Web Audio API 需要用户交互后才能 resume)
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume()
+    }
+
+    console.log(`[AudioPCM] AudioContext sampleRate: ${this.audioContext.sampleRate}, state: ${this.audioContext.state}`)
+
     this.sourceNode = this.audioContext.createMediaStreamSource(stream)
 
     // 使用 ScriptProcessorNode 将音频转为 PCM
@@ -156,7 +164,8 @@ export default function ControlPanel(): JSX.Element {
               channelCount: 1,
               sampleRate: 16000,
               echoCancellation: true,
-              noiseSuppression: true
+              noiseSuppression: true,
+              autoGainControl: true
             }
           })
           console.log('Microphone captured')

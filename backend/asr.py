@@ -83,17 +83,31 @@ class ASREngine:
 
         print(f"[ASR] Processing {len(audio_to_process)} samples ({len(audio_to_process)/16000:.1f}s), total: {self.total_audio_processed/16000:.1f}s")
 
+        # 音频归一化：如果音量太低，自动提升增益
+        peak = np.abs(audio_to_process).max()
+        if peak > 0 and peak < 0.15:
+            gain = 0.25 / peak
+            audio_to_process = np.clip(audio_to_process * gain, -1.0, 1.0)
+            print(f"[ASR] Audio normalized: peak={peak:.4f}, gain={gain:.2f}")
+
         try:
             # 执行转录
+            # 使用 VAD 过滤静音，减少 Whisper 幻觉
+            # condition_on_previous_text=False 避免重复幻觉
             segments, info = self.model.transcribe(
                 audio_to_process,
                 beam_size=5,
                 vad_filter=True,
                 vad_parameters=dict(
-                    min_silence_duration_ms=500,
-                    speech_pad_ms=200
+                    min_silence_duration_ms=300,
+                    speech_pad_ms=200,
+                    threshold=0.3,  # 降低 VAD 阈值，对安静语音更敏感
                 ),
-                condition_on_previous_text=True
+                condition_on_previous_text=False,  # 避免重复幻觉
+                language=None,  # 自动检测语言
+                task="transcribe",
+                no_speech_threshold=0.6,  # 高于此概率认为是无语音
+                log_prob_threshold=-1.0,  # 过滤低置信度结果
             )
 
             # 转换为列表 (必须消费 generator 否则不会执行)
