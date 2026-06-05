@@ -7,7 +7,6 @@ export default function SubtitleOverlay(): JSX.Element {
   const isDragging = useRef(false)
   const lastPos = useRef({ x: 0, y: 0 })
 
-  // 自动滚动到最新字幕
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
@@ -35,25 +34,36 @@ export default function SubtitleOverlay(): JSX.Element {
 
   return (
     <div
-      className="w-full h-full flex flex-col select-none rounded-2xl overflow-hidden"
+      className="w-full h-full select-none rounded-2xl"
       style={{
         background: 'linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.65) 100%)',
         backdropFilter: 'blur(24px)',
         WebkitBackdropFilter: 'blur(24px)',
         border: '1px solid rgba(255,255,255,0.08)',
-        boxShadow: '0 4px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)'
+        boxShadow: '0 4px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)',
+        display: 'flex',
+        flexDirection: 'column',
+        position: 'relative'
       }}
     >
-      {/* 固定标题栏 - 始终可见，不参与滚动 */}
+      {/* 标题栏 - sticky 置顶，浏览器原生保证始终在顶部 */}
       <div
         onMouseDown={handleDragStart}
         onMouseMove={handleDragMove}
         onMouseUp={handleDragEnd}
         onMouseLeave={handleDragEnd}
-        className="flex items-center justify-between px-4 py-2.5 cursor-grab active:cursor-grabbing flex-shrink-0"
+        className="flex items-center justify-between px-4 py-2.5 cursor-grab active:cursor-grabbing"
         style={{
-          background: 'linear-gradient(180deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.04) 100%)',
-          borderBottom: '1px solid rgba(255,255,255,0.1)'
+          position: 'sticky',
+          top: 0,
+          zIndex: 10,
+          background: 'linear-gradient(180deg, rgba(20,20,20,0.95) 0%, rgba(10,10,10,0.85) 100%)',
+          backdropFilter: 'blur(16px)',
+          WebkitBackdropFilter: 'blur(16px)',
+          borderBottom: '1px solid rgba(255,255,255,0.12)',
+          borderTopLeftRadius: '1rem',
+          borderTopRightRadius: '1rem',
+          flexShrink: 0
         }}
       >
         <div className="flex items-center gap-2">
@@ -77,16 +87,16 @@ export default function SubtitleOverlay(): JSX.Element {
         </div>
       </div>
 
-      {/* 字幕滚动区域 - 独立于标题栏 */}
+      {/* 字幕滚动区 */}
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto px-4 py-2 space-y-1.5 scrollbar-hide"
+        className="flex-1 min-h-0 overflow-y-auto px-4 pb-3 pt-1.5 space-y-1.5 scrollbar-hide"
         style={{ scrollBehavior: 'smooth' }}
       >
         {visibleSegments.map((seg) => (
           <div
             key={seg.id}
-            className="rounded-xl px-3.5 py-2.5 transition-all animate-fadeIn"
+            className="animate-fadeIn rounded-xl px-3.5 py-2.5 transition-all"
             style={{
               backgroundColor: seg.status === 'corrected'
                 ? 'rgba(59, 130, 246, 0.15)'
