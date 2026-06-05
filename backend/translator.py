@@ -4,7 +4,9 @@
 """
 
 import os
+import json
 import httpx
+from typing import AsyncGenerator
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"
@@ -103,6 +105,77 @@ class Translator:
             import traceback
             traceback.print_exc()
             return text
+
+    async def translate_stream(
+        self,
+        text: str,
+        source_lang: str = "en",
+        target_lang: str = "zh"
+    ) -> AsyncGenerator[str, None]:
+        """流式翻译：逐 token 返回翻译结果 (DeepSeek stream=true)。"""
+        if not text.strip():
+            yield ""
+            return
+
+        lang_names = {
+            "en": "英文", "ja": "日文", "ko": "韩文",
+            "fr": "法文", "de": "德文", "es": "西班牙文",
+            "ru": "俄文", "zh": "中文",
+        }
+        source_lang_name = lang_names.get(source_lang, "外文")
+
+        if self.context_history:
+            context_str = "\n".join(self.context_history[-self.MAX_CONTEXT:])
+            prompt = TRANSLATION_PROMPT_WITH_CONTEXT.format(
+                source_lang=source_lang_name, context=context_str, text=text
+            )
+        else:
+            prompt = TRANSLATION_PROMPT.format(
+                source_lang=source_lang_name, text=text
+            )
+
+        accumulated = ""
+        try:
+            async with self.client.stream(
+                "POST",
+                f"{self.base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": "你是一位专业的同声传译员。将外语实时翻译为中文，忠于原文，不增删内容。"},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 512,
+                    "stream": True
+                }
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            delta = chunk["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                accumulated += content
+                                yield accumulated
+                        except json.JSONDecodeError:
+                            pass
+
+            self._add_context(text, accumulated)
+            print(f"[Translator Stream] '{text[:40]}' -> '{accumulated[:40]}'")
+
+        except Exception as e:
+            print(f"[Translator Stream] Error: {e}")
+            yield accumulated or text
 
     async def _call_deepseek(self, prompt: str) -> str:
         """真正的异步 DeepSeek API 调用 (使用 httpx.AsyncClient)。"""

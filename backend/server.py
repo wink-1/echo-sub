@@ -221,16 +221,22 @@ async def translation_worker(
 
         try:
             print(f"[Trans Worker] Translating: '{src}'")
-            translated = await translator.translate(src, lang, "zh")
-            print(f"[Trans Worker] -> '{translated}'")
+            accumulated = ""
+            async for partial in translator.translate_stream(src, lang, "zh"):
+                accumulated = partial
+                await safe_send_json(websocket, {
+                    "type": "translation_partial",
+                    "data": {"id": sid, "text": partial, "originalText": src, "language": lang}
+                })
 
             await safe_send_json(websocket, {
                 "type": "translation_final",
-                "data": {"id": sid, "text": translated, "originalText": src, "language": lang}
+                "data": {"id": sid, "text": accumulated, "originalText": src, "language": lang}
             })
+            print(f"[Trans Worker] -> '{accumulated[:40]}'")
 
             segment_history.append({
-                "id": sid, "source": src, "translation": translated, "language": lang
+                "id": sid, "source": src, "translation": accumulated, "language": lang
             })
             if len(segment_history) > MAX_HISTORY:
                 segment_history.pop(0)
