@@ -27,18 +27,21 @@ export function onBackendMessage(callback: (msg: BackendMessage) => void): void 
  * 先自动下载模型（如果未缓存），再启动服务器
  */
 export async function startPythonBackend(): Promise<void> {
-  const backendDir = join(__dirname, '../../backend')
+  const backendDir = getBackendDir()
   const pythonPath = findPython()
 
-  // 从 .env 文件读取环境变量（API Key 等敏感信息不硬编码在代码中）
+  // 从 .env 文件读取环境变量
   const envOverrides = loadEnvFile(backendDir)
+
+  console.log(`Backend dir: ${backendDir}`)
+  console.log(`Python path: ${pythonPath}`)
 
   // Step 1: 预下载 ASR 模型（如果已缓存则秒过）
   console.log('Downloading ASR model (if not cached)...')
   await downloadModelIfNeeded(pythonPath, backendDir, envOverrides)
 
   // Step 2: 启动 Python 后端
-  console.log('Starting Python backend with:', pythonPath)
+  console.log('Starting Python backend...')
 
   pythonProcess = spawn(pythonPath, [join(backendDir, 'server.py')], {
     cwd: backendDir,
@@ -205,25 +208,38 @@ export function sendToBackend(message: Record<string, unknown>): void {
 }
 
 /**
+ * 获取后端目录路径 (dev 模式 vs 打包模式)
+ */
+function getBackendDir(): string {
+  // 打包模式: extraResources 将 backend/ 放到 Contents/Resources/backend/
+  if (app.isPackaged) {
+    const resourcePath = process.resourcesPath || join(app.getAppPath(), '..', 'Resources')
+    return join(resourcePath, 'backend')
+  }
+  // 开发模式: 相对于 out/main/ 的 ../../backend/
+  return join(__dirname, '../../backend')
+}
+
+/**
  * 查找可用的 Python 可执行文件
- * 优先使用 backend/venv/bin/python3 (用户安装的依赖都在这里面)
+ * 优先使用 backend/venv/bin/python3 (dev 模式)
  */
 function findPython(): string {
-  const backendDir = join(__dirname, '../../backend')
-  const venvPython = join(backendDir, 'venv/bin/python3')
+  const backendDir = getBackendDir()
 
-  // 检查 venv 是否存在
-  try {
-    const fs = require('fs')
-    if (fs.existsSync(venvPython)) {
-      console.log('Using venv Python:', venvPython)
-      return venvPython
-    }
-  } catch {
-    // 忽略错误
+  // 开发模式: 检查 venv
+  if (!app.isPackaged) {
+    const venvPython = join(backendDir, 'venv/bin/python3')
+    try {
+      const fs = require('fs')
+      if (fs.existsSync(venvPython)) {
+        console.log('Using venv Python:', venvPython)
+        return venvPython
+      }
+    } catch { /* ignore */ }
   }
 
-  // 降级到系统 python3
+  // 系统 python3 (开发降级 或 打包模式)
   console.log('Using system Python: python3')
   return 'python3'
 }

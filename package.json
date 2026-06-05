@@ -9,7 +9,39 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "package": "npm run build && electron-builder --mac",
     "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "com.echosub.app",
+    "productName": "EchoSub",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "backend/**/*",
+      "!backend/venv/**",
+      "!backend/__pycache__/**",
+      "!backend/.env",
+      "!backend/*.pyc"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": ["**/*", "!venv/**", "!__pycache__/**", "!.env", "!*.pyc"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": ["dmg", "zip"],
+      "entitlements": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "EchoSub 需要使用麦克风进行语音识别",
+        "NSScreenCaptureUsageDescription": "EchoSub 需要捕获系统音频进行同声传译"
+      }
+    }
   },
   "dependencies": {
     "electron-audio-loopback": "^1.0.0",
