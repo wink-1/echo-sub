@@ -31,7 +31,7 @@ DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.co
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
 # ASR 模型配置
-ASR_MODEL = os.environ.get("ASR_MODEL", "medium")
+ASR_MODEL = os.environ.get("ASR_MODEL", "small")
 
 # WebSocket 连接是否活跃 (用于判断纠错任务是否应该继续发送)
 ws_active = False
@@ -109,20 +109,21 @@ async def websocket_endpoint(websocket: WebSocket):
                 None, asr_engine.transcribe_chunk, audio_data
             )
 
+            # Stage 1: 先发送所有 ASR 结果，收集待翻译段落
+            segment_entries = []
             for segment in segments:
                 source_text = segment.text.strip()
                 if not source_text:
                     continue
 
-                # 过滤 Whisper 幻觉：如果和上一句完全相同，跳过
+                # 过滤重复
                 if segment_history and segment_history[-1]["source"] == source_text:
                     print(f"[WS] Skipping duplicate: '{source_text}'")
                     continue
 
                 print(f"[WS] ASR result: '{source_text}' (lang={info.language})")
 
-                # 发送 ASR 结果
-                segment_id = f"seg-{len(segment_history)}"
+                segment_id = f"seg-{len(segment_history) + len(segment_entries)}"
                 await safe_send_json(websocket, {
                     "type": "asr_final",
                     "data": {
@@ -132,40 +133,58 @@ async def websocket_endpoint(websocket: WebSocket):
                     }
                 })
 
-                # 翻译 (DeepSeek API)
-                if translator:
-                    print(f"[WS] Translating: '{source_text}'")
-                    translated = await translator.translate(
-                        source_text, info.language, "zh"
-                    )
+                segment_entries.append({
+                    "segment_id": segment_id,
+                    "source_text": source_text,
+                    "language": info.language
+                })
+
+            # Stage 2: 并行翻译所有段落 (asyncio.gather 并发)
+            if translator and segment_entries:
+
+                async def translate_one(entry):
+                    src = entry["source_text"]
+                    lang = entry["language"]
+                    sid = entry["segment_id"]
+
+                    print(f"[WS] Translating: '{src}'")
+                    translated = await translator.translate(src, lang, "zh")
                     print(f"[WS] Translation: '{translated}'")
 
-                    # 发送翻译结果
                     await safe_send_json(websocket, {
                         "type": "translation_final",
                         "data": {
-                            "id": segment_id,
+                            "id": sid,
                             "text": translated,
-                            "originalText": source_text,
-                            "language": info.language
+                            "originalText": src,
+                            "language": lang
                         }
                     })
+                    return {
+                        "id": sid, "source": src,
+                        "translation": translated, "language": lang
+                    }
 
-                    segment_history.append({
-                        "id": segment_id,
-                        "source": source_text,
-                        "translation": translated,
-                        "language": info.language
-                    })
+                results = await asyncio.gather(*[
+                    translate_one(e) for e in segment_entries
+                ])
 
+                for result in results:
+                    segment_history.append(result)
                     if len(segment_history) > MAX_HISTORY:
                         segment_history.pop(0)
 
-                    # 异步纠错 (带 ws_active 检查)
-                    if corrector:
-                        asyncio.create_task(
-                            run_correction(websocket, segment_id, source_text, translated)
+                if corrector:
+                    for entry in segment_entries:
+                        corresponding = next(
+                            (r for r in results if r["id"] == entry["segment_id"]),
+                            None
                         )
+                        if corresponding:
+                            asyncio.create_task(run_correction(
+                                websocket, entry["segment_id"],
+                                entry["source_text"], corresponding["translation"]
+                            ))
 
     except WebSocketDisconnect:
         print("[WS] Client disconnected (WebSocketDisconnect)")

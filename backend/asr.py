@@ -1,5 +1,6 @@
 """
 ASR 引擎 - 基于 faster-whisper 的流式语音识别
+优化: MPS 加速 + 滑动窗口 + 1.5s chunk
 """
 
 import os
@@ -10,12 +11,27 @@ from faster_whisper import WhisperModel
 HF_MIRROR = "https://hf-mirror.com"
 
 
+def _detect_device() -> str:
+    """检测最佳可用设备，Apple Silicon 优先尝试 MPS。"""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            print("[ASR] Apple Silicon detected, attempting MPS acceleration...")
+            return "mps"
+        else:
+            return "cpu"
+    except ImportError:
+        return "cpu"
+
+
 class ASREngine:
     """faster-whisper ASR 引擎"""
 
     def __init__(
         self,
-        model_size: str = "base",
+        model_size: str = "small",
         device: str = "auto",
         compute_type: str = "auto"
     ):
@@ -23,20 +39,11 @@ class ASREngine:
 
         # 自动检测设备
         if device == "auto":
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    device = "cuda"
-                elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                    device = "cpu"  # MPS 对 faster-whisper 支持有限,先用 CPU
-                else:
-                    device = "cpu"
-            except ImportError:
-                device = "cpu"
+            device = _detect_device()
 
         # 自动选择计算精度
         if compute_type == "auto":
-            compute_type = "float16" if device == "cuda" else "int8"
+            compute_type = "float16" if device in ("cuda", "mps") else "int8"
 
         print(f"Loading Whisper model: {model_size} on {device} ({compute_type})")
 
@@ -44,23 +51,41 @@ class ASREngine:
         os.environ.setdefault("HF_ENDPOINT", HF_MIRROR)
         print(f"Using HuggingFace endpoint: {os.environ.get('HF_ENDPOINT')}")
 
-        self.model = WhisperModel(
-            model_size,
-            device=device,
-            compute_type=compute_type
-        )
+        self.device = device
+        self.compute_type = compute_type
+
+        # MPS 可能不被 CTranslate2 支持，失败时自动回退 CPU
+        try:
+            self.model = WhisperModel(
+                model_size,
+                device=device,
+                compute_type=compute_type
+            )
+        except RuntimeError as e:
+            if device == "mps" and "MPS" in str(e):
+                print(f"[ASR] MPS not supported by faster-whisper/CTranslate2, falling back to CPU: {e}")
+                self.device = "cpu"
+                self.compute_type = "int8"
+                self.model = WhisperModel(
+                    model_size,
+                    device="cpu",
+                    compute_type="int8"
+                )
+            else:
+                raise
 
         # 音频缓冲区 (累积音频直到有足够数据)
         self.audio_buffer = np.array([], dtype=np.float32)
-        self.min_chunk_size = 16000 * 2  # 至少 2 秒音频
         self.sample_rate = 16000
+        self.min_chunk_size = int(self.sample_rate * 1.5)  # 1.5 秒音频 (降低首字延迟)
+        self.overlap_seconds = 0.5  # 滑动窗口重叠时间
         self.total_audio_processed = 0
 
-        print(f"ASR engine ready: {model_size} on {device}")
+        print(f"ASR engine ready: {model_size} on {self.device} ({self.compute_type})")
 
     def transcribe_chunk(self, audio: np.ndarray) -> tuple:
         """
-        转录一个音频块
+        转录一个音频块 (滑动窗口模式)
 
         Args:
             audio: float32 numpy array, 16kHz mono, 值范围 [-1, 1]
@@ -74,14 +99,26 @@ class ASREngine:
 
         # 缓冲区不足,等待更多音频
         if buffer_len < self.min_chunk_size:
-            return [], type("Info", (), {"language": "en"})()
+            return [], _info_stub("en")
 
-        # 取出缓冲区内容
-        audio_to_process = self.audio_buffer
-        self.audio_buffer = np.array([], dtype=np.float32)
+        # 取出全部缓冲区内容处理
+        audio_to_process = self.audio_buffer.copy()
         self.total_audio_processed += len(audio_to_process)
 
-        print(f"[ASR] Processing {len(audio_to_process)} samples ({len(audio_to_process)/16000:.1f}s), total: {self.total_audio_processed/16000:.1f}s")
+        # 滑动窗口：保留最后 overlap_seconds 秒的音频到下一个 chunk
+        # 防止句子在 chunk 边界被截断
+        overlap_samples = int(self.sample_rate * self.overlap_seconds)
+        if buffer_len > overlap_samples:
+            self.audio_buffer = self.audio_buffer[-overlap_samples:]
+        else:
+            self.audio_buffer = np.array([], dtype=np.float32)
+
+        print(
+            f"[ASR] Processing {len(audio_to_process)} samples "
+            f"({len(audio_to_process)/self.sample_rate:.1f}s), "
+            f"overlap: {len(self.audio_buffer)/self.sample_rate:.1f}s, "
+            f"total: {self.total_audio_processed/self.sample_rate:.1f}s"
+        )
 
         # 音频归一化：如果音量太低，自动提升增益
         peak = np.abs(audio_to_process).max()
@@ -91,9 +128,6 @@ class ASREngine:
             print(f"[ASR] Audio normalized: peak={peak:.4f}, gain={gain:.2f}")
 
         try:
-            # 执行转录
-            # 使用 VAD 过滤静音，减少 Whisper 幻觉
-            # condition_on_previous_text=False 避免重复幻觉
             segments, info = self.model.transcribe(
                 audio_to_process,
                 beam_size=5,
@@ -101,20 +135,22 @@ class ASREngine:
                 vad_parameters=dict(
                     min_silence_duration_ms=300,
                     speech_pad_ms=200,
-                    threshold=0.3,  # 降低 VAD 阈值，对安静语音更敏感
+                    threshold=0.3,
                 ),
-                condition_on_previous_text=False,  # 避免重复幻觉
-                language=None,  # 自动检测语言
+                condition_on_previous_text=False,
+                language=None,
                 task="transcribe",
-                no_speech_threshold=0.6,  # 高于此概率认为是无语音
-                log_prob_threshold=-1.0,  # 过滤低置信度结果
+                no_speech_threshold=0.6,
+                log_prob_threshold=-1.0,
             )
 
-            # 转换为列表 (必须消费 generator 否则不会执行)
             segments_list = list(segments)
 
             if segments_list:
-                print(f"[ASR] Detected {len(segments_list)} segments, lang={info.language}, prob={info.language_probability:.2f}")
+                print(
+                    f"[ASR] Detected {len(segments_list)} segments, "
+                    f"lang={info.language}, prob={info.language_probability:.2f}"
+                )
                 for i, seg in enumerate(segments_list):
                     print(f"[ASR] Segment {i}: '{seg.text.strip()}'")
             else:
@@ -126,9 +162,14 @@ class ASREngine:
             print(f"[ASR] Transcription error: {e}")
             import traceback
             traceback.print_exc()
-            return [], type("Info", (), {"language": "en"})()
+            return [], _info_stub("en")
 
     def reset(self):
         """重置缓冲区"""
         self.audio_buffer = np.array([], dtype=np.float32)
         print("[ASR] Buffer reset")
+
+
+def _info_stub(lang: str = "en"):
+    """创建占位 info 对象"""
+    return type("Info", (), {"language": lang, "language_probability": 0.0})

@@ -41,7 +41,7 @@ class Corrector:
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         self.base_url = base_url
         self.model = model
-        self.client = httpx.Client(timeout=TIMEOUT_SECONDS)
+        self.client = httpx.AsyncClient(timeout=TIMEOUT_SECONDS)
 
     async def correct(
         self,
@@ -77,29 +77,25 @@ class Corrector:
             return {"corrected": current_translation, "changed": False}
 
     async def _call_deepseek(self, prompt: str) -> str:
-        import asyncio
+        """真正的异步 DeepSeek API 调用 (使用 httpx.AsyncClient)。"""
+        response = await self.client.post(
+            f"{self.base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "max_tokens": 512,
+                "stream": False
+            }
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
 
-        api_key = self.api_key
-        base_url = self.base_url
-        model = self.model
-
-        def _sync_call():
-            response = self.client.post(
-                f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                    "max_tokens": 512,
-                    "stream": False
-                }
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
-
-        return await asyncio.get_event_loop().run_in_executor(None, _sync_call)
+    async def close(self):
+        """关闭异步 HTTP 客户端。"""
+        await self.client.aclose()
