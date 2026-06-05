@@ -89,9 +89,10 @@ class ASREngine:
         # 音频缓冲区 (累积音频直到有足够数据)
         self.audio_buffer = np.array([], dtype=np.float32)
         self.sample_rate = 16000
-        self.min_chunk_size = int(self.sample_rate * 1.5)  # 1.5 秒音频 (降低首字延迟)
-        self.overlap_seconds = 0.5  # 滑动窗口重叠时间
+        self.min_chunk_size = int(self.sample_rate * 0.8)  # 0.8s (队列管线使用，降低首字延迟)
+        self.overlap_seconds = 0.3  # 滑动窗口重叠
         self.total_audio_processed = 0
+        self.forced_language = None  # None=auto, 'en'/'ja' 等强制语言
 
         print(f"ASR engine ready: {model_size} on {self.device} ({self.compute_type})")
 
@@ -174,6 +175,35 @@ class ASREngine:
             print(f"[ASR] Transcription error: {e}")
             import traceback
             traceback.print_exc()
+            return [], _info_stub("en")
+
+    def transcribe_chunk_direct(self, audio: np.ndarray) -> tuple:
+        """
+        直接转录音频块 (不做内部缓冲，由队列 worker 管理缓冲)
+        """
+        peak = np.abs(audio).max()
+        if peak > 0 and peak < 0.15:
+            audio = np.clip(audio * (0.25 / peak), -1.0, 1.0)
+
+        try:
+            segments, info = self.model.transcribe(
+                audio,
+                beam_size=5,
+                vad_filter=True,
+                vad_parameters=dict(
+                    min_silence_duration_ms=200,
+                    speech_pad_ms=120,
+                    threshold=0.3,
+                ),
+                condition_on_previous_text=False,
+                language=self.forced_language,
+                task="transcribe",
+                no_speech_threshold=0.6,
+                log_prob_threshold=-1.0,
+            )
+            return list(segments), info
+        except Exception as e:
+            print(f"[ASR] Transcription error: {e}")
             return [], _info_stub("en")
 
     def reset(self):
