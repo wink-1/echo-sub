@@ -62,7 +62,7 @@ export async function startPythonBackend(): Promise<void> {
   })
 
   pythonProcess.stderr?.on('data', (data: Buffer) => {
-    console.error(`[Python Error] ${data.toString().trim()}`)
+    console.log(`[Python] ${data.toString().trim()}`)
   })
 
   pythonProcess.on('exit', (code) => {
@@ -178,7 +178,7 @@ async function downloadModelIfNeeded(
     })
 
     child.stderr.on('data', (data: Buffer) => {
-      console.error(`[Download Error] ${data.toString().trim()}`)
+      console.log(`[Download] ${data.toString().trim()}`)
     })
 
     child.on('exit', (code) => {

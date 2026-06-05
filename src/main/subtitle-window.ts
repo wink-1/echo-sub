@@ -4,28 +4,30 @@ import { join } from 'path'
 let subtitleWindow: BrowserWindow | null = null
 
 export function createSubtitleWindow(): BrowserWindow {
-  // 如果窗口已存在，先关闭
   if (subtitleWindow && !subtitleWindow.isDestroyed()) {
     subtitleWindow.close()
   }
 
-  // 获取屏幕尺寸，默认放在底部居中
   const primaryDisplay = screen.getPrimaryDisplay()
   const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
-  const winWidth = 800
-  const winHeight = 160
+  const winWidth = 900
+  const winHeight = 240
 
   subtitleWindow = new BrowserWindow({
     width: winWidth,
     height: winHeight,
+    minWidth: 600,
+    minHeight: 160,
     x: Math.round((screenWidth - winWidth) / 2),
-    y: Math.round(screenHeight - winHeight - 80),
+    y: Math.round(screenHeight - winHeight - 60),
     alwaysOnTop: true,
     transparent: true,
     frame: false,
     skipTaskbar: false,
     resizable: true,
-    hasShadow: false,
+    hasShadow: true,
+    vibrancy: 'hud',         // macOS 半透明毛玻璃效果
+    visualEffectState: 'active',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -33,8 +35,7 @@ export function createSubtitleWindow(): BrowserWindow {
     }
   })
 
-  // 设置窗口透明度 (macOS)
-  subtitleWindow.setOpacity(0.95)
+  subtitleWindow.setOpacity(0.92)
 
   // 允许在所有工作区和全屏上显示
   subtitleWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
@@ -45,13 +46,11 @@ export function createSubtitleWindow(): BrowserWindow {
     subtitleWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash: '#subtitle' })
   }
 
-  // 处理窗口关闭
   subtitleWindow.on('closed', () => {
     subtitleWindow = null
   })
 
-  // 注册拖拽 IPC：渲染进程通过 -webkit-app-region: drag 不工作于 transparent frameless 窗口
-  // 所以我们用 IPC 方式实现拖拽
+  // 拖拽 IPC
   ipcMain.removeHandler('subtitle-drag')
   ipcMain.handle('subtitle-drag', (_event, deltaX: number, deltaY: number) => {
     if (subtitleWindow && !subtitleWindow.isDestroyed()) {
