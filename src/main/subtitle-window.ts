@@ -11,22 +11,22 @@ export function createSubtitleWindow(): BrowserWindow {
   const primaryDisplay = screen.getPrimaryDisplay()
   const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
   const winWidth = 900
-  const winHeight = 240
+  const winHeight = 340
 
   subtitleWindow = new BrowserWindow({
     width: winWidth,
     height: winHeight,
     minWidth: 600,
-    minHeight: 160,
+    minHeight: 220,
     x: Math.round((screenWidth - winWidth) / 2),
-    y: Math.round(screenHeight - winHeight - 60),
+    y: Math.round(screenHeight - winHeight - 40),
     alwaysOnTop: true,
     transparent: true,
     frame: false,
     skipTaskbar: false,
     resizable: true,
     hasShadow: true,
-    vibrancy: 'hud',         // macOS 半透明毛玻璃效果
+    vibrancy: 'hud',
     visualEffectState: 'active',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
