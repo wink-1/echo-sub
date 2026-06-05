@@ -24,6 +24,7 @@ export function onBackendMessage(callback: (msg: BackendMessage) => void): void 
 
 /**
  * 启动 Python 后端进程并建立 WebSocket 连接
+ * 先自动下载模型（如果未缓存），再启动服务器
  */
 export async function startPythonBackend(): Promise<void> {
   const backendDir = join(__dirname, '../../backend')
@@ -32,6 +33,11 @@ export async function startPythonBackend(): Promise<void> {
   // 从 .env 文件读取环境变量（API Key 等敏感信息不硬编码在代码中）
   const envOverrides = loadEnvFile(backendDir)
 
+  // Step 1: 预下载 ASR 模型（如果已缓存则秒过）
+  console.log('Downloading ASR model (if not cached)...')
+  await downloadModelIfNeeded(pythonPath, backendDir, envOverrides)
+
+  // Step 2: 启动 Python 后端
   console.log('Starting Python backend with:', pythonPath)
 
   pythonProcess = spawn(pythonPath, [join(backendDir, 'server.py')], {
@@ -42,8 +48,7 @@ export async function startPythonBackend(): Promise<void> {
       ...envOverrides,
       PORT: String(BACKEND_PORT),
       HF_ENDPOINT: 'https://hf-mirror.com',
-      PYTHONUNBUFFERED: '1',  // Python 日志实时输出,不缓冲
-      // 清除代理设置，避免本地代理拦截 HuggingFace 镜像连接
+      PYTHONUNBUFFERED: '1',
       http_proxy: '',
       https_proxy: '',
       HTTP_PROXY: '',
@@ -73,9 +78,9 @@ export async function startPythonBackend(): Promise<void> {
  * 连接到 Python 后端 WebSocket
  */
 async function connectWebSocket(): Promise<void> {
-  // medium 模型加载约需 30-60 秒，需要足够多的重试
-  const maxRetries = 60
-  const retryDelay = 2000
+  // 模型已预下载到缓存，服务器启动很快
+  const maxRetries = 20
+  const retryDelay = 1000
 
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -141,6 +146,53 @@ export function stopPythonBackend(): void {
     pythonProcess.kill('SIGTERM')
     pythonProcess = null
   }
+}
+
+/**
+ * 预下载 ASR 模型到本地缓存（如果已缓存则立即返回）
+ */
+async function downloadModelIfNeeded(
+  pythonPath: string,
+  backendDir: string,
+  envOverrides: Record<string, string>
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(pythonPath, [join(backendDir, 'download_model.py')], {
+      cwd: backendDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        ...envOverrides,
+        HF_ENDPOINT: 'https://hf-mirror.com',
+        PYTHONUNBUFFERED: '1',
+        http_proxy: '',
+        https_proxy: '',
+        HTTP_PROXY: '',
+        HTTPS_PROXY: '',
+        ALL_PROXY: ''
+      }
+    })
+
+    child.stdout.on('data', (data: Buffer) => {
+      console.log(`[Download] ${data.toString().trim()}`)
+    })
+
+    child.stderr.on('data', (data: Buffer) => {
+      console.error(`[Download Error] ${data.toString().trim()}`)
+    })
+
+    child.on('exit', (code) => {
+      if (code === 0) {
+        resolve()
+      } else {
+        reject(new Error(`Model download failed with code ${code}`))
+      }
+    })
+
+    child.on('error', (err) => {
+      reject(err)
+    })
+  })
 }
 
 /**
