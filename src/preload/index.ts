@@ -27,6 +27,11 @@ const electronAPI = {
   // 检查是否正在捕获
   isAudioCapturing: () => ipcRenderer.invoke('is-audio-capturing'),
 
+  // 字幕悬浮窗控制
+  openSubtitleWindow: () => ipcRenderer.invoke('open-subtitle-window'),
+  closeSubtitleWindow: () => ipcRenderer.invoke('close-subtitle-window'),
+  isSubtitleWindowOpen: () => ipcRenderer.invoke('is-subtitle-window-open'),
+
   // 获取系统音频源 ID (用于 getUserMedia 捕获桌面音频)
   // macOS 需要屏幕录制权限
   getSystemAudioSource: async (): Promise<string | null> => {

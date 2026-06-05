@@ -48,6 +48,7 @@ export default function ControlPanel(): JSX.Element {
   const [status, setStatus] = useState<'idle' | 'connecting' | 'running' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [audioSource, setAudioSource] = useState<'none' | 'system' | 'microphone'>('none')
+  const [isSubtitleOpen, setIsSubtitleOpen] = useState(false)
   const processorRef = useRef<AudioPCMProcessor | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
@@ -55,6 +56,15 @@ export default function ControlPanel(): JSX.Element {
   const [audioLevel, setAudioLevel] = useState(0)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animFrameRef = useRef<number>(0)
+
+  useEffect(() => {
+    // 检查字幕窗口状态
+    const checkSubtitle = async () => {
+      const open = await window.electronAPI?.isSubtitleWindowOpen()
+      setIsSubtitleOpen(!!open)
+    }
+    checkSubtitle()
+  }, [])
 
   const startLevelMonitor = (stream: MediaStream) => {
     const ctx = new AudioContext({ sampleRate: 16000 })
@@ -180,59 +190,105 @@ export default function ControlPanel(): JSX.Element {
     }
   }
 
+  const toggleSubtitleWindow = async () => {
+    try {
+      if (isSubtitleOpen) {
+        await window.electronAPI?.closeSubtitleWindow()
+        setIsSubtitleOpen(false)
+      } else {
+        await window.electronAPI?.openSubtitleWindow()
+        setIsSubtitleOpen(true)
+      }
+    } catch (err) {
+      console.error('Failed to toggle subtitle window:', err)
+    }
+  }
+
   return (
-    <div className="bg-gray-800 rounded-lg p-4 space-y-3">
+    <div className="bg-gray-800/50 rounded-xl p-4 space-y-4 border border-gray-700/50">
+      {/* 头部状态 */}
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-gray-300">控制面板</h2>
         <div className="flex items-center gap-2">
-          <span
-            className={`w-2 h-2 rounded-full ${
-              status === 'running'
-                ? 'bg-green-500 animate-pulse'
-                : status === 'error'
-                  ? 'bg-red-500'
-                  : status === 'connecting'
-                    ? 'bg-yellow-500 animate-pulse'
-                    : 'bg-gray-500'
-            }`}
-          />
-          <span className="text-xs text-gray-400">
-            {status === 'idle' && '待机'}
-            {status === 'connecting' && '连接中...'}
-            {status === 'running' && '运行中'}
-            {status === 'error' && '错误'}
-          </span>
+          <div className={`w-2 h-2 rounded-full ${
+            status === 'running'
+              ? 'bg-green-500 animate-pulse'
+              : status === 'error'
+                ? 'bg-red-500'
+                : status === 'connecting'
+                  ? 'bg-yellow-500 animate-pulse'
+                  : 'bg-gray-500'
+          }`} />
+          <span className="text-sm font-medium text-gray-200">控制面板</span>
         </div>
+        <span className={`text-xs px-2 py-0.5 rounded-full ${
+          status === 'running'
+            ? 'bg-green-500/20 text-green-400'
+            : status === 'error'
+              ? 'bg-red-500/20 text-red-400'
+              : status === 'connecting'
+                ? 'bg-yellow-500/20 text-yellow-400'
+                : 'bg-gray-700 text-gray-400'
+        }`}>
+          {status === 'idle' && '待机'}
+          {status === 'connecting' && '连接中...'}
+          {status === 'running' && '运行中'}
+          {status === 'error' && '错误'}
+        </span>
       </div>
 
+      {/* 主按钮 */}
       <button
         onClick={handleToggle}
-        className={`w-full py-2 rounded-md font-medium text-sm transition-colors ${
+        className={`w-full py-3 rounded-lg font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 ${
           isCapturing
-            ? 'bg-red-600 hover:bg-red-700 text-white'
-            : 'bg-blue-600 hover:bg-blue-700 text-white'
+            ? 'bg-red-500/90 hover:bg-red-600 text-white shadow-lg shadow-red-500/20'
+            : 'bg-blue-500/90 hover:bg-blue-600 text-white shadow-lg shadow-blue-500/20'
         }`}
       >
-        {isCapturing ? '⏹ 停止翻译' : '▶ 开始翻译'}
+        {isCapturing ? (
+          <>
+            <span className="w-4 h-4 rounded-sm bg-white/80" />
+            停止翻译
+          </>
+        ) : (
+          <>
+            <span className="w-0 h-0 border-t-4 border-b-4 border-l-6 border-transparent border-l-white ml-0.5" />
+            开始翻译
+          </>
+        )}
       </button>
 
       {/* 音频电平指示器 */}
       {isCapturing && (
-        <div className="space-y-1">
+        <div className="space-y-2">
           <div className="flex items-center justify-between text-xs">
-            <span className="text-gray-400">
-              {audioSource === 'system' ? '🔊 系统音频' : '🎤 麦克风'}
+            <span className="text-gray-400 flex items-center gap-1.5">
+              {audioSource === 'system' ? (
+                <>
+                  <span className="text-sm">🔊</span>
+                  <span>系统音频</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-sm">🎤</span>
+                  <span>麦克风</span>
+                </>
+              )}
             </span>
-            <span className={`text-gray-400 ${audioLevel > 0.05 ? 'text-green-400' : 'text-red-400'}`}>
-              {audioLevel > 0.05 ? '检测到音频' : '未检测到音频'}
+            <span className={`text-xs font-medium ${
+              audioLevel > 0.05 ? 'text-green-400' : 'text-gray-500'
+            }`}>
+              {audioLevel > 0.05 ? '● 检测到音频' : '○ 未检测到音频'}
             </span>
           </div>
-          <div className="w-full bg-gray-700 rounded-full h-2">
+          <div className="w-full bg-gray-700/50 rounded-full h-2 overflow-hidden">
             <div
-              className="h-2 rounded-full transition-all duration-100"
+              className="h-full rounded-full transition-all duration-75"
               style={{
                 width: `${Math.max(audioLevel * 100, 2)}%`,
-                backgroundColor: audioLevel > 0.05 ? '#22c55e' : '#6b7280'
+                background: audioLevel > 0.05
+                  ? 'linear-gradient(90deg, #22c55e, #4ade80)'
+                  : '#6b7280'
               }}
             />
           </div>
@@ -240,21 +296,33 @@ export default function ControlPanel(): JSX.Element {
       )}
 
       {errorMsg && (
-        <div className="bg-red-900/50 text-red-300 text-xs p-2 rounded">
+        <div className="bg-red-500/10 border border-red-500/20 text-red-300 text-xs p-3 rounded-lg">
           {errorMsg}
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-2 text-xs">
-        <div className="bg-gray-700 rounded p-2">
-          <div className="text-gray-400">源语言</div>
-          <div className="text-white font-medium">自动检测</div>
+      {/* 设置和悬浮窗 */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-gray-700/30 rounded-lg p-3">
+          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">源语言</div>
+          <div className="text-sm text-white font-medium">自动检测</div>
         </div>
-        <div className="bg-gray-700 rounded p-2">
-          <div className="text-gray-400">目标语言</div>
-          <div className="text-white font-medium">中文</div>
+        <div className="bg-gray-700/30 rounded-lg p-3">
+          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">目标语言</div>
+          <div className="text-sm text-white font-medium">中文</div>
         </div>
       </div>
+
+      <button
+        onClick={toggleSubtitleWindow}
+        className={`w-full py-2 rounded-lg text-xs font-medium transition-all ${
+          isSubtitleOpen
+            ? 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30'
+            : 'bg-gray-700/30 text-gray-400 hover:bg-gray-700/50 border border-gray-700/30'
+        }`}
+      >
+        {isSubtitleOpen ? '✕ 关闭字幕悬浮窗' : '⛶ 打开字幕悬浮窗'}
+      </button>
     </div>
   )
 }
