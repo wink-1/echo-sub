@@ -17,11 +17,18 @@ export const useTranslationStore = create<TranslationState>((set) => ({
 
   addSegment: (segment) =>
     set((state) => {
-      const existing = state.segments.findIndex((s) => s.id === segment.id)
-      if (existing >= 0) {
-        // 更新已有段落
+      const index = state.segments.findIndex((s) => s.id === segment.id)
+      if (index >= 0) {
+        // 更新已有段落 - 保留已有翻译，只更新新值
         const newSegments = [...state.segments]
-        newSegments[existing] = { ...newSegments[existing], ...segment }
+        const old = newSegments[index]
+        newSegments[index] = {
+          ...old,
+          sourceText: segment.sourceText || old.sourceText,
+          translatedText: segment.translatedText || old.translatedText,
+          status: segment.status || old.status,
+          language: segment.language || old.language,
+        }
         return { segments: newSegments }
       }
       // 保留最近 50 段

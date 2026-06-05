@@ -343,7 +343,7 @@ export default function SubtitleOverlay(): JSX.Element {
                   : '2px solid rgba(74, 222, 128, 0.4)',
             }}
           >
-            {seg.sourceText && seg.sourceText !== seg.translatedText && (
+            {seg.sourceText && seg.translatedText && seg.sourceText !== seg.translatedText && (
               <div className="text-[11px] text-white/40 leading-relaxed mb-1">
                 {seg.sourceText}
               </div>
@@ -356,7 +356,7 @@ export default function SubtitleOverlay(): JSX.Element {
                   textShadow: '0 1px 3px rgba(0,0,0,0.7)'
                 }}
               >
-                {seg.translatedText}
+                {seg.translatedText || seg.sourceText}
                 {seg.status === 'partial' && (
                   <span className="inline-block w-1 h-4 bg-yellow-400/70 ml-1 animate-pulse rounded-sm" />
                 )}

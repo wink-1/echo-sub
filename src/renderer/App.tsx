@@ -27,29 +27,32 @@ export default function App(): JSX.Element {
 
       console.log('[App] Translation update:', msg.type, msg.data.text?.slice(0, 30))
 
-      if (msg.type === 'translation_partial' || msg.type === 'asr_partial') {
+      if (msg.type === 'asr_final') {
+        // ASR 最终结果：只设置原文，translatedText 设为空（等待翻译）
         store.addSegment({
           id: msg.data.id || `seg-${Date.now()}`,
-          sourceText: msg.data.originalText || '',
-          translatedText: msg.data.text,
+          sourceText: msg.data.text,
+          translatedText: '',
           status: 'partial',
           timestamp: Date.now(),
           language: msg.data.language || 'en'
         })
-      } else if (msg.type === 'asr_final') {
+      } else if (msg.type === 'translation_partial') {
         store.addSegment({
           id: msg.data.id || `seg-${Date.now()}`,
-          sourceText: msg.data.text,
+          sourceText: msg.data.originalText || '',
           translatedText: msg.data.text,
           status: 'partial',
           timestamp: Date.now(),
           language: msg.data.language || 'en'
         })
       } else if (msg.type === 'translation_final') {
-        store.updateSegment(msg.data.id || `seg-${Date.now()}`, {
+        store.addSegment({
+          id: msg.data.id || `seg-${Date.now()}`,
           sourceText: msg.data.originalText || '',
           translatedText: msg.data.text,
           status: 'confirmed',
+          timestamp: Date.now(),
           language: msg.data.language || 'en'
         })
       }

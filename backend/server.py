@@ -168,17 +168,7 @@ async def asr_worker(
             print(f"[ASR Worker] Error: {e}")
             continue
 
-        # Partial: 发送当前全部文本作为流式预览
-        if segments:
-            full_text = " ".join(s.text.strip() for s in segments if s.text.strip())
-            if full_text:
-                # 使用当前计数器作为 partial id，让前端更新同一个 partial segment
-                partial_id = f"partial-{asr_segment_counter}"
-                await safe_send_json(websocket, {
-                    "type": "asr_partial",
-                    "data": {"id": partial_id, "text": full_text, "language": info.language}
-                })
-
+        # 逐个处理识别到的 segment
         for segment in segments:
             source_text = segment.text.strip()
             if not source_text:
