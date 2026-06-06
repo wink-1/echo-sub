@@ -35,9 +35,12 @@ ENV/
 *.pt
 models/*.bin
 
-# Environment
+# Environment (never commit secrets!)
 .env
+.env.*
+!.env.example
 .env.local
+.env.production
 
 # IDE
 .idea/

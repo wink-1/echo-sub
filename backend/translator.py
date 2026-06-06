@@ -63,7 +63,7 @@ class Translator:
         self.client = httpx.AsyncClient(timeout=TIMEOUT_SECONDS)
         self.context_history: list[str] = []
         self.MAX_CONTEXT = 3
-        print(f"[Translator] DeepSeek API: {self.model}, key={self.api_key[:8]}...")
+        print(f"[Translator] DeepSeek API: {self.model} (key configured)")
 
     async def translate(
         self,

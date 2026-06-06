@@ -351,7 +351,7 @@ def init_engines():
     print(f"  ASR: {ASR_MODEL} | chunk={ASR_CHUNK_SECONDS}s overlap={ASR_OVERLAP_SECONDS}s")
     print(f"  Translation: DeepSeek ({DEEPSEEK_MODEL})")
     if DEEPSEEK_API_KEY:
-        print(f"  API Key: {DEEPSEEK_API_KEY[:8]}...")
+        print(f"  API Key: *** (已配置)")
     else:
         print("  ⚠️  API Key 未设置！请在 .env 文件中配置 DEEPSEEK_API_KEY")
 

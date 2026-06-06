@@ -45,45 +45,30 @@ echo ">>> 安装 npm 依赖..."
 npm install
 echo -e "${GREEN}✓${NC} npm 依赖安装完成"
 
-# 4. 安装 Python 依赖
+# 4. 创建 Python 虚拟环境
+echo ""
+echo ">>> 创建 Python 虚拟环境..."
+if [ ! -d "backend/venv" ]; then
+    python3 -m venv backend/venv
+    echo -e "${GREEN}✓${NC} Python 虚拟环境创建完成"
+else
+    echo -e "${GREEN}✓${NC} Python 虚拟环境已存在"
+fi
+
+# 5. 安装 Python 依赖 (在 venv 中)
 echo ""
 echo ">>> 安装 Python 依赖..."
-pip3 install -r backend/requirements.txt
+backend/venv/bin/pip install -r backend/requirements.txt
 echo -e "${GREEN}✓${NC} Python 依赖安装完成"
 
-# 5. 检查/安装 Ollama
-echo ""
-echo ">>> 检查 Ollama..."
-if ! check_command ollama; then
-    echo -e "${YELLOW}正在安装 Ollama...${NC}"
-    curl -fsSL https://ollama.com/install.sh | sh
-    echo -e "${GREEN}✓${NC} Ollama 安装完成"
-else
-    echo -e "${GREEN}✓${NC} Ollama 已安装"
-fi
-
-# 6. 启动 Ollama 服务 (如果没有运行)
-echo ""
-echo ">>> 启动 Ollama 服务..."
-if ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
-    ollama serve &
-    sleep 3
-    echo -e "${GREEN}✓${NC} Ollama 服务已启动"
-else
-    echo -e "${GREEN}✓${NC} Ollama 服务已在运行"
-fi
-
-# 7. 下载翻译模型
-echo ""
-echo ">>> 下载 Qwen2.5:7b 翻译模型 (约4.7GB)..."
-ollama pull qwen2.5:7b
-echo -e "${GREEN}✓${NC} 翻译模型下载完成"
-
-# 8. 复制环境变量模板
+# 6. 复制环境变量模板
 echo ""
 if [ ! -f .env ]; then
     cp .env.example .env
     echo -e "${GREEN}✓${NC} 已创建 .env 配置文件"
+    echo ""
+    echo -e "${YELLOW}⚠️  重要: 请编辑 .env 文件，填入你的 DeepSeek API Key${NC}"
+    echo "   获取地址: https://platform.deepseek.com/api_keys"
 else
     echo -e "${GREEN}✓${NC} .env 已存在"
 fi
@@ -95,5 +80,6 @@ echo ""
 echo "运行以下命令启动应用:"
 echo "  npm run dev"
 echo ""
-echo "首次运行时,Whisper 模型会自动下载 (~1.5GB)"
+echo "首次启动时, Whisper 模型会自动下载 (~244MB)"
+echo "请确保已配置 DeepSeek API Key (.env 文件)"
 echo "====================================="
