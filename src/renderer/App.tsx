@@ -130,12 +130,15 @@ export default function App(): JSX.Element {
       }
     })
 
-    // 监听后端状态（检测 ASR 测试模式）
+    // 监听后端状态 — 重新连接时清除旧段（避免后端重启 ID 冲突覆盖）
     const unsubStatus = window.electronAPI.onBackendStatus((status: string) => {
       console.log('[App] Backend status:', status)
       if (status.startsWith('asr_only')) {
         store.setAsrOnly(true)
-        console.log('[App] ASR-only mode activated — no translation will be performed')
+      } else if (status.startsWith('connected') || status.startsWith('started')) {
+        // 后端重新连接/重新启动 → 清除旧段，避免新 segment ID 与旧段冲突导致覆盖
+        store.clearSegments()
+        store.setAsrOnly(false)
       }
     })
 

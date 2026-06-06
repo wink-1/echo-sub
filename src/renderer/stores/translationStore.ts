@@ -31,8 +31,10 @@ export const useTranslationStore = create<TranslationState>((set) => ({
         const old = newSegments[index]
         newSegments[index] = {
           ...old,
-          sourceText: segment.sourceText ?? old.sourceText,
-          translatedText: segment.translatedText ?? old.translatedText,
+          // 用 || 而不是 ?? — 空字符串视为"未提供"，保留旧值
+          // 避免 translatedText:'' 覆盖已有翻译（如后端重启 ID 冲突）
+          sourceText: segment.sourceText || old.sourceText,
+          translatedText: segment.translatedText || old.translatedText,
           status: segment.status ?? old.status,
           language: segment.language ?? old.language,
         }
