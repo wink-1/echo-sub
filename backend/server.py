@@ -1,12 +1,16 @@
 """
 EchoSub Python 后端 - FastAPI WebSocket 服务器
 队列管线: audio_queue → asr_worker → translation_queue → translation_worker
+
+停顿检测策略: 当 >600ms 无新音频到达时 (说话人停顿), 立即处理缓冲区并发送 asr_final;
+说话中则在缓冲区达到最小长度时发送 asr_partial 提供实时反馈。
 """
 
 import asyncio
 import json
 import logging
 import os
+import time
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uvicorn
@@ -43,9 +47,11 @@ ASR_ONLY = os.environ.get("ASR_ONLY", "").lower() in ("1", "true", "yes")
 
 ws_active = False
 
-# ASR worker 参数
-ASR_CHUNK_SECONDS = 5.0     # 每次 ASR 的最小音频长度（需要足够上下文才能准确识别）
-ASR_OVERLAP_SECONDS = 1.0   # 滑动窗口重叠（保留上文上下文）
+# ASR worker 参数 — 降低最小 chunk 以加快响应
+ASR_CHUNK_SECONDS = 2.0     # 每次 ASR 的最小音频长度（从 5s 降低到 2s 加快响应）
+ASR_OVERLAP_SECONDS = 0.5   # 滑动窗口重叠（从 1s 降低到 0.5s）
+PAUSE_THRESHOLD_SECONDS = 0.6  # 停顿检测阈值：>600ms 无新音频视为一句话结束
+MIN_SPEECH_FOR_PAUSE = 0.8     # 停顿触发处理的最少语音时长（秒），避免噪音误触发
 
 
 @app.websocket("/ws")
@@ -116,7 +122,9 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_data = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
             if len(audio_data) == 0:
                 continue
-            if np.abs(audio_data).mean() < 0.005:
+
+            # 静音过滤保留但放宽阈值，避免过度过滤微弱语音
+            if np.abs(audio_data).mean() < 0.003:
                 continue
 
             try:
@@ -158,22 +166,52 @@ async def asr_worker(
     audio_buffer = np.array([], dtype=np.float32)
     min_samples = int(16000 * ASR_CHUNK_SECONDS)
     overlap = int(16000 * ASR_OVERLAP_SECONDS)
+    min_speech_for_pause = int(16000 * MIN_SPEECH_FOR_PAUSE)
 
     # 累积已识别的文本，用于 condition_on_previous_text 模式下的增量提取
     accumulated_text = ""
+    last_audio_time = time.monotonic()
 
     while not stop_event.is_set():
         try:
             chunk = await asyncio.wait_for(audio_queue.get(), timeout=0.1)
             audio_buffer = np.concatenate([audio_buffer, chunk])
+            last_audio_time = time.monotonic()
         except asyncio.TimeoutError:
             pass
 
-        if len(audio_buffer) < min_samples:
+        buffer_len = len(audio_buffer)
+        time_since_audio = time.monotonic() - last_audio_time
+        is_pause = time_since_audio > PAUSE_THRESHOLD_SECONDS
+
+        # 决定是否处理缓冲区:
+        # 1. 缓冲区达到最小长度 → 处理 (说话中，发 asr_partial)
+        # 2. 检测到停顿 且 缓冲区有足够语音 → 处理 (一句话结束，发 asr_final)
+        should_process = False
+        is_final = False
+
+        if buffer_len >= min_samples:
+            should_process = True
+            is_final = is_pause  # 如果同时有停顿，标记为 final
+        elif is_pause and buffer_len >= min_speech_for_pause:
+            should_process = True
+            is_final = True  # 停顿触发 → 一定是一句完整的话
+
+        if not should_process:
             continue
 
+        # 取出全部缓冲区内容处理
         process_data = audio_buffer.copy()
-        audio_buffer = audio_buffer[-overlap:] if len(audio_buffer) > overlap else np.array([], dtype=np.float32)
+
+        # 滑动窗口：保留重叠部分到下一个 chunk
+        if buffer_len > overlap:
+            audio_buffer = audio_buffer[-overlap:]
+        else:
+            audio_buffer = np.array([], dtype=np.float32)
+
+        # 停顿触发后重置 last_audio_time（避免连续触发）
+        if is_final:
+            last_audio_time = time.monotonic()
 
         loop = asyncio.get_event_loop()
         try:
@@ -187,43 +225,31 @@ async def asr_worker(
         if not segments:
             continue
 
-        # condition_on_previous_text=True 模式下，whisper 可能返回累积文本
-        # 提取增量：当前识别结果去掉已累积的部分
+        # 拼接 whisper 识别结果
         full_text = " ".join(s.text.strip() for s in segments if s.text.strip())
-        new_text = full_text
 
-        # 如果当前结果以已累积文本开头，只取新增部分
-        if accumulated_text and full_text.startswith(accumulated_text):
-            new_text = full_text[len(accumulated_text):].strip()
-        elif accumulated_text:
-            # 不完全匹配：尝试找到最长公共后缀/前缀
-            # 简单处理：如果当前结果包含已累积文本，取后面的
-            idx = full_text.find(accumulated_text)
-            if idx >= 0:
-                new_text = full_text[idx + len(accumulated_text):].strip()
-            else:
-                # 完全不匹配（用户跳过了内容或修正了之前的识别）
-                # 发送完整的当前结果，并重置累积
-                logger.warning(f"Text mismatch, resetting accumulation. Old: '{accumulated_text[:50]}' New: '{full_text[:50]}'")
-                accumulated_text = ""
-                new_text = full_text
+        # ---- 增量提取 ----
+        new_text = _extract_increment(full_text, accumulated_text)
+
+        # 更新累积文本边界
+        accumulated_text = full_text
 
         if not new_text:
             continue
 
-        # 更新累积文本
-        accumulated_text = full_text
-
         seg_id = f"seg-{asr_segment_counter}"
         asr_segment_counter += 1
-        logger.info(f"{new_text} (lang={info.language}, id={seg_id})")
+
+        msg_type = "asr_final" if is_final else "asr_partial"
+        logger.info(f"[{msg_type}] {new_text} (lang={info.language}, id={seg_id}, pause={is_pause:.2f}s)")
 
         await safe_send_json(websocket, {
-            "type": "asr_final",
+            "type": msg_type,
             "data": {"id": seg_id, "text": new_text, "language": info.language}
         })
 
-        if not ASR_ONLY:
+        # 只有 asr_final 才送翻译队列（完整句子才翻译，partial 不翻译）
+        if is_final and not ASR_ONLY:
             try:
                 translation_queue.put_nowait({
                     "segment_id": seg_id,
@@ -232,6 +258,42 @@ async def asr_worker(
                 })
             except asyncio.QueueFull:
                 logger.warning("Translation queue full")
+
+
+def _extract_increment(full_text: str, accumulated: str) -> str:
+    """
+    从 whisper 输出中提取增量文本，支持累积和重叠两种模式。
+
+    累积模式: full_text 以 accumulated 为前缀 → 截取尾部
+    重叠模式: full_text 开头与 accumulated 尾部有重叠 → 逐词检测重叠后提取增量
+    """
+    if not accumulated:
+        return full_text.strip()
+
+    ft = full_text.strip()
+    acc = accumulated.strip()
+
+    # 累积模式: 纯前缀匹配
+    if ft.startswith(acc):
+        suffix = ft[len(acc):].strip()
+        return suffix or ft  # 无增量时保留原文
+
+    # 重叠模式: 从 accumulated 尾部取词，寻找与 full_text 开头的重叠
+    acc_words = acc.split()
+    ft_words = ft.split()
+    max_check = min(len(acc_words), 50)
+
+    for overlap_len in range(max_check, 0, -1):
+        overlap_candidate = " ".join(acc_words[-overlap_len:])
+        if overlap_candidate and ft.startswith(overlap_candidate):
+            after_overlap = ft[len(overlap_candidate):].strip()
+            if after_overlap:
+                return after_overlap
+            return ""  # 整段都是重叠，无新内容
+
+    # 无匹配 → 大范围修正，返回全文
+    logger.warning(f"Text mismatch, resetting. Old: '{acc[:50]}' New: '{ft[:50]}'")
+    return ft
 
 
 async def translation_worker(
@@ -360,7 +422,7 @@ def init_engines():
     corrector = Corrector(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, model=DEEPSEEK_MODEL)
 
     logger.info("All engines initialized!")
-    logger.info(f"  ASR: {ASR_MODEL} | chunk={ASR_CHUNK_SECONDS}s overlap={ASR_OVERLAP_SECONDS}s")
+    logger.info(f"  ASR: {ASR_MODEL} | chunk={ASR_CHUNK_SECONDS}s overlap={ASR_OVERLAP_SECONDS}s | pause={PAUSE_THRESHOLD_SECONDS}s")
     logger.info(f"  Translation: DeepSeek ({DEEPSEEK_MODEL})")
     if DEEPSEEK_API_KEY:
         logger.info("  API Key: *** (已配置)")
