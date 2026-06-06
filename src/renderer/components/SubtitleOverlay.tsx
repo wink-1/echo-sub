@@ -12,7 +12,6 @@ export default function SubtitleOverlay(): JSX.Element {
   // 控制状态
   const [isCapturing, setIsCapturing] = useState(false)
   const [status, setStatus] = useState<'idle' | 'connecting' | 'running' | 'error'>('idle')
-  const [audioSource, setAudioSource] = useState<'none' | 'system' | 'microphone'>('none')
   const [sourceLanguage, setSourceLanguage] = useState('auto')
   const [errorMsg, setErrorMsg] = useState('')
   const [audioLevel, setAudioLevel] = useState(0)
@@ -75,100 +74,70 @@ export default function SubtitleOverlay(): JSX.Element {
   }
 
   // 捕获系统音频（通过 getDisplayMedia，macOS 支持 ScreenCaptureKit）
-  const captureSystemAudio = async (): Promise<MediaStream | null> => {
-    try {
-      // macOS: 检查屏幕录制权限
-      const perm = await window.electronAPI?.checkScreenRecordPermission?.()
-      if (perm && !perm.granted && perm.platform === 'darwin') {
-        console.warn('💡 macOS 屏幕录制权限未授予！请在 系统设置 → 隐私与安全性 → 屏幕录制 中允许 EchoSub/终端')
-      }
+  const captureSystemAudio = async (): Promise<MediaStream> => {
+    // macOS: 检查屏幕录制权限
+    const perm = await window.electronAPI?.checkScreenRecordPermission?.()
+    if (perm && !perm.granted && perm.platform === 'darwin') {
+      throw new Error(
+        '屏幕录制权限未授予。请前往 系统设置 → 隐私与安全性 → 屏幕录制，允许 EchoSub。'
+      )
+    }
 
-      const platform = window.electronAPI?.getPlatform?.() || ''
+    const platform = window.electronAPI?.getPlatform?.() || ''
 
-      if (platform === 'darwin') {
-        // macOS: 使用 getDisplayMedia（底层调用 ScreenCaptureKit，支持系统音频）
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          audio: true,
-          video: { width: { ideal: 1 }, height: { ideal: 1 }, frameRate: { ideal: 1 } } as MediaTrackConstraints,
-        })
-        const videoTracks = stream.getVideoTracks()
-        videoTracks.forEach((t) => t.stop())
-        const audioTracks = stream.getAudioTracks()
-        console.log(`[EchoSub] getDisplayMedia: ${audioTracks.length} audio, ${videoTracks.length} video tracks`)
-        if (audioTracks.length === 0) {
-          stream.getTracks().forEach((t) => t.stop())
-          return null
-        }
-        return stream
-      }
-
-      // Windows/Linux: 使用 desktopCapturer + getUserMedia
-      const sourceId = await window.electronAPI?.getSystemAudioSource()
-      if (!sourceId) {
-        console.warn('[EchoSub] No screen source found via desktopCapturer')
-        return null
-      }
-      console.log('[EchoSub] Got screen source:', sourceId)
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId },
-        } as unknown as MediaTrackConstraints,
-        video: {
-          mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId, maxWidth: 1, maxHeight: 1 },
-        } as unknown as MediaTrackConstraints,
+    if (platform === 'darwin') {
+      // macOS: 使用 getDisplayMedia（底层调用 ScreenCaptureKit，支持系统音频）
+      // ⚠️ 用户必须在弹出的对话框中勾选"分享音频"才能捕获系统声音
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        audio: true,
+        video: { width: { ideal: 1 }, height: { ideal: 1 }, frameRate: { ideal: 1 } } as MediaTrackConstraints,
       })
-      stream.getVideoTracks().forEach((t) => t.stop())
+      const videoTracks = stream.getVideoTracks()
+      videoTracks.forEach((t) => t.stop())
       const audioTracks = stream.getAudioTracks()
-      console.log(`[EchoSub] getUserMedia: ${audioTracks.length} audio tracks`)
+      console.log(`[EchoSub] getDisplayMedia: ${audioTracks.length} audio, ${videoTracks.length} video tracks`)
       if (audioTracks.length === 0) {
         stream.getTracks().forEach((t) => t.stop())
-        return null
+        throw new Error(
+          '未捕获到系统音频。请在弹出对话框中勾选底部的「分享音频」选项后重试。'
+        )
       }
       return stream
-    } catch (err) {
-      console.warn('[EchoSub] System audio capture failed:', err)
-      return null
     }
-  }
 
-  // 捕获麦克风
-  const captureMicrophone = async (): Promise<MediaStream> => {
+    // Windows/Linux: 使用 desktopCapturer + getUserMedia
+    const sourceId = await window.electronAPI?.getSystemAudioSource()
+    if (!sourceId) {
+      throw new Error('未检测到可用的屏幕源，请确认显示器已连接。')
+    }
+    console.log('[EchoSub] Got screen source:', sourceId)
+
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
-        channelCount: 1,
-        sampleRate: 16000,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
+        mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId },
+      } as unknown as MediaTrackConstraints,
+      video: {
+        mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId, maxWidth: 1, maxHeight: 1 },
+      } as unknown as MediaTrackConstraints,
     })
-    console.log(`[EchoSub] Microphone: ${stream.getAudioTracks().length} tracks`)
+    stream.getVideoTracks().forEach((t) => t.stop())
+    const audioTracks = stream.getAudioTracks()
+    console.log(`[EchoSub] getUserMedia: ${audioTracks.length} audio tracks`)
+    if (audioTracks.length === 0) {
+      stream.getTracks().forEach((t) => t.stop())
+      throw new Error('系统音频捕获失败，请检查系统音频设置。')
+    }
     return stream
   }
 
-  // 启动音频捕获（优先系统音频，失败时回退麦克风）
-  const startSystemAudio = async () => {
+  // 启动音频捕获（仅系统音频，不回退麦克风）
+  const startCapturing = async () => {
     setStatus('connecting')
     setErrorMsg('')
 
-    let source: 'system' | 'microphone' = 'microphone'
-
     try {
-      // 优先尝试系统音频
-      const sysStream = await captureSystemAudio()
-
-      if (sysStream) {
-        source = 'system'
-        streamRef.current = sysStream
-      } else {
-        // 系统音频不可用，回退到麦克风
-        console.warn('[EchoSub] 系统音频不可用，降级到麦克风')
-        streamRef.current = await captureMicrophone()
-      }
-
-      setAudioSource(source)
-      window.electronAPI?.reportAudioSource?.(source)
+      const stream = await captureSystemAudio()
+      streamRef.current = stream
 
       startLevelMonitor(streamRef.current)
       const processor = new AudioPCMProcessor()
@@ -181,9 +150,9 @@ export default function SubtitleOverlay(): JSX.Element {
         setStatus('running')
       }
     } catch (err) {
-      console.error('Failed to start audio capture:', err)
+      console.error('Failed to start system audio capture:', err)
       setStatus('error')
-      setErrorMsg(err instanceof Error ? err.message : '音频启动失败，请检查权限设置')
+      setErrorMsg(err instanceof Error ? err.message : '系统音频捕获失败')
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop())
         streamRef.current = null
@@ -203,14 +172,13 @@ export default function SubtitleOverlay(): JSX.Element {
     setIsCapturing(false)
     setStatus('idle')
     setErrorMsg('')
-    setAudioSource('none')
   }
 
   const handleToggle = async () => {
     if (isCapturing) {
       await stopCapture()
     } else {
-      await startSystemAudio()
+      await startCapturing()
     }
   }
 
@@ -289,7 +257,7 @@ export default function SubtitleOverlay(): JSX.Element {
           {isCapturing && (
             <span className="text-[10px] font-medium flex items-center gap-1" style={{ color: 'rgba(74, 222, 128, 0.7)' }}>
               <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: 'rgba(74, 222, 128, 0.8)' }} />
-              {audioSource === 'system' ? '系统音频' : '麦克风'}
+              系统音频
             </span>
           )}
         </div>
