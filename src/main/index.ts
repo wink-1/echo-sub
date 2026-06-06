@@ -17,12 +17,39 @@ const defaultSettings: AppSettings = {
   windowOpacity: 0.85
 }
 
+function createTrayIcon(): Electron.NativeImage {
+  // 程序化创建 16x16 托盘图标（FM 电台波形图案）
+  const size = 16
+  const buffer = Buffer.alloc(size * size * 4, 0) // RGBA
+  // 画两条竖条（简易声波图标）
+  for (let y = 3; y <= 12; y++) {
+    // 左竖条
+    for (let x = 4; x <= 5; x++) {
+      const i = (y * size + x) * 4
+      buffer[i] = 255; buffer[i + 3] = 220  // 白色半透明
+    }
+    // 中竖条
+    for (let x = 7; x <= 8; x++) {
+      const i = (y * size + x) * 4
+      buffer[i] = 255; buffer[i + 3] = 220
+    }
+    // 右竖条（稍短）
+    if (y >= 5 && y <= 10) {
+      for (let x = 10; x <= 11; x++) {
+        const i = (y * size + x) * 4
+        buffer[i] = 255; buffer[i + 3] = 220
+      }
+    }
+  }
+  const icon = nativeImage.createFromBuffer(buffer, { width: size, height: size })
+  if (process.platform === 'darwin') {
+    icon.setTemplateImage(true)
+  }
+  return icon
+}
+
 function createTray(): void {
-  // 创建 16x16 简易托盘图标
-  const icon = nativeImage.createFromDataURL(
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAbwAAAG8B8aLcQwAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAEYSURBVDiNpZMxTsNAEEX/rNeOAwUlHVdA4gJcAokLUFBQcAQkLkCBhMQFkJAoKOAIFICElJQp3PAMK97dJXgULDl2PFL8abTz/8zO7Cql8B8T4Bk4AY7LGg3gEXgAHoF1KQC4BG6b2EONq8CkBHhs8ufAcSOB0yZfC9gB3oBX4LZI4A74AF6A2yKBe+ATeAbuigQegC/gGbiPBVbAd5kAizmgHQs8AT/AJ/AUC6TZcA58AnNzrfkBcAOcg87+j1CbGcANcA7szwJSK84oI50RZ0ylmSFGMEaMMWKM3Asm32qBbM0fHtN5xnAiDQCbgwJfyMRx2SC8b+bQBmRGJB3MnAPoLmY/G0OnBq9g/X1BZP8FrNY/M/QBdSQlxtX9n4AAAAASUVORK5CYII='
-  )
-  tray = new Tray(icon)
+  tray = new Tray(createTrayIcon())
   tray.setToolTip('EchoSub - AI同声传译助手')
 
   const contextMenu = Menu.buildFromTemplate([
