@@ -24,7 +24,7 @@ export const SUBTITLE_CONFIG = {
   /** 存储段落最大数 */
   MAX_STORED_SEGMENTS: 50,
   /** 窗口默认透明度 */
-  DEFAULT_OPACITY: 0.92,
+  DEFAULT_OPACITY: 1.0,
 } as const
 
 /** 音频处理配置 */

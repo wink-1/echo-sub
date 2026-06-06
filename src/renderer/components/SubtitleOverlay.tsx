@@ -1,15 +1,42 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { MouseEvent } from 'react'
+import { SUBTITLE_CONFIG } from '../../shared/config'
 import { useTranslationStore } from '../stores/translationStore'
 import { AudioPCMProcessor } from './audio-processor'
-import { SUBTITLE_CONFIG } from '../../shared/config'
+
+const LANGUAGE_OPTIONS = [
+  { value: 'auto', label: '自动检测' },
+  { value: 'en', label: 'English' },
+  { value: 'ja', label: '日本語' },
+  { value: 'ko', label: '한국어' },
+  { value: 'zh', label: '中文' },
+  { value: 'fr', label: 'Français' },
+  { value: 'de', label: 'Deutsch' },
+  { value: 'es', label: 'Español' },
+  { value: 'ru', label: 'Русский' }
+]
+
+function getAudioCaptureError(platform: string, audioTracks: number): string {
+  if (platform === 'win32') {
+    return audioTracks === 0
+      ? '没有捕获到系统音频。请确认电脑正在播放声音，并重启 EchoSub 后再试。'
+      : 'Windows 系统音频捕获失败。请检查显示器连接、远程桌面环境，或重启 EchoSub。'
+  }
+
+  if (platform === 'darwin') {
+    return '没有捕获到系统音频。请重新开始，并在系统弹窗中勾选“分享音频”。'
+  }
+
+  return '当前版本暂不支持在 Linux 上捕获系统音频。'
+}
 
 export default function SubtitleOverlay(): JSX.Element {
   const { segments, clearSegments, isAsrOnly } = useTranslationStore()
   const scrollRef = useRef<HTMLDivElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
   const isDragging = useRef(false)
   const lastPos = useRef({ x: 0, y: 0 })
 
-  // 控制状态
   const [isCapturing, setIsCapturing] = useState(false)
   const [status, setStatus] = useState<'idle' | 'connecting' | 'running' | 'error'>('idle')
   const [sourceLanguage, setSourceLanguage] = useState('auto')
@@ -23,28 +50,28 @@ export default function SubtitleOverlay(): JSX.Element {
   const levelCtxRef = useRef<AudioContext | null>(null)
   const levelSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const animFrameRef = useRef<number>(0)
-  const bottomRef = useRef<HTMLDivElement>(null)
 
-  // 自动滚动到底部（仅在 confirmed 段落更新时触发，避免 partial 频繁滚动）
   useEffect(() => {
     const lastSeg = segments[segments.length - 1]
     if (!lastSeg || lastSeg.status !== 'confirmed') return
+
     const timer = setTimeout(() => {
       bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
     }, 50)
     return () => clearTimeout(timer)
   }, [segments])
 
-  // 音频电平监测
   const startLevelMonitor = (stream: MediaStream) => {
     const ctx = new AudioContext({ sampleRate: 16000 })
     const source = ctx.createMediaStreamSource(stream)
     const analyser = ctx.createAnalyser()
     analyser.fftSize = 256
     source.connect(analyser)
+
     levelCtxRef.current = ctx
     levelSourceRef.current = source
     analyserRef.current = analyser
+
     const dataArray = new Uint8Array(analyser.frequencyBinCount)
     const tick = () => {
       analyser.getByteFrequencyData(dataArray)
@@ -68,69 +95,70 @@ export default function SubtitleOverlay(): JSX.Element {
     setAudioLevel(0)
   }
 
+  const cleanupCapture = async () => {
+    processorRef.current?.stop()
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+    processorRef.current = null
+    streamRef.current = null
+    stopLevelMonitor()
+    await window.electronAPI?.stopCapture()
+  }
+
   const handleLanguageChange = async (lang: string) => {
     setSourceLanguage(lang)
     await window.electronAPI?.updateSettings({ sourceLanguage: lang })
   }
 
-  // 捕获系统音频（通过 getDisplayMedia，macOS 支持 ScreenCaptureKit）
   const captureSystemAudio = async (): Promise<MediaStream> => {
-    // macOS: 检查屏幕录制权限
-    const perm = await window.electronAPI?.checkScreenRecordPermission?.()
-    if (perm && !perm.granted && perm.platform === 'darwin') {
-      throw new Error(
-        '屏幕录制权限未授予。请前往 系统设置 → 隐私与安全性 → 屏幕录制，允许 EchoSub。'
-      )
-    }
-
     const platform = window.electronAPI?.getPlatform?.() || ''
 
+    if (platform === 'linux') {
+      throw new Error('当前版本暂不支持在 Linux 上捕获系统音频。')
+    }
+
     if (platform === 'darwin') {
-      // macOS: 使用 getDisplayMedia（底层调用 ScreenCaptureKit，支持系统音频）
-      // ⚠️ 用户必须在弹出的对话框中勾选"分享音频"才能捕获系统声音
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        audio: true,
-        video: { width: { ideal: 1 }, height: { ideal: 1 }, frameRate: { ideal: 1 } } as MediaTrackConstraints,
-      })
-      const videoTracks = stream.getVideoTracks()
-      videoTracks.forEach((t) => t.stop())
-      const audioTracks = stream.getAudioTracks()
-      console.log(`[EchoSub] getDisplayMedia: ${audioTracks.length} audio, ${videoTracks.length} video tracks`)
-      if (audioTracks.length === 0) {
-        stream.getTracks().forEach((t) => t.stop())
+      const perm = await window.electronAPI?.checkScreenRecordPermission?.()
+      if (perm && !perm.granted) {
         throw new Error(
-          '未捕获到系统音频。请在弹出对话框中勾选底部的「分享音频」选项后重试。'
+          '屏幕录制权限未授予。请前往“系统设置 > 隐私与安全性 > 屏幕录制”，允许 EchoSub 后重启应用。'
         )
       }
-      return stream
     }
 
-    // Windows/Linux: 使用 desktopCapturer + getUserMedia
-    const sourceId = await window.electronAPI?.getSystemAudioSource()
-    if (!sourceId) {
-      throw new Error('未检测到可用的屏幕源，请确认显示器已连接。')
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        audio: true,
+        video: {
+          width: { ideal: 1 },
+          height: { ideal: 1 },
+          frameRate: { ideal: 1 }
+        } as MediaTrackConstraints
+      })
+    } catch (error) {
+      if (platform === 'win32') {
+        throw new Error('未检测到可用的屏幕源。请确认显示器已连接，或重启 EchoSub 后再试。')
+      }
+      throw error
     }
-    console.log('[EchoSub] Got screen source:', sourceId)
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId },
-      } as unknown as MediaTrackConstraints,
-      video: {
-        mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId, maxWidth: 1, maxHeight: 1 },
-      } as unknown as MediaTrackConstraints,
-    })
-    stream.getVideoTracks().forEach((t) => t.stop())
+    const videoTracks = stream.getVideoTracks()
     const audioTracks = stream.getAudioTracks()
-    console.log(`[EchoSub] getUserMedia: ${audioTracks.length} audio tracks`)
+    videoTracks.forEach((track) => track.stop())
+
+    console.log(
+      `[EchoSub] getDisplayMedia: ${audioTracks.length} audio, ${videoTracks.length} video tracks`
+    )
+
     if (audioTracks.length === 0) {
-      stream.getTracks().forEach((t) => t.stop())
-      throw new Error('系统音频捕获失败，请检查系统音频设置。')
+      stream.getTracks().forEach((track) => track.stop())
+      throw new Error(getAudioCaptureError(platform, audioTracks.length))
     }
+
+    window.electronAPI?.reportAudioSource?.(platform === 'win32' ? 'system-loopback' : 'display-media')
     return stream
   }
 
-  // 启动音频捕获（仅系统音频，不回退麦克风）
   const startCapturing = async () => {
     setStatus('connecting')
     setErrorMsg('')
@@ -139,36 +167,29 @@ export default function SubtitleOverlay(): JSX.Element {
       const stream = await captureSystemAudio()
       streamRef.current = stream
 
-      startLevelMonitor(streamRef.current)
+      const result = await window.electronAPI?.startCapture()
+      if (result?.success === false) {
+        throw new Error('后端捕获服务启动失败，请稍后重试。')
+      }
+
+      startLevelMonitor(stream)
       const processor = new AudioPCMProcessor()
-      await processor.start(streamRef.current)
+      await processor.start(stream)
       processorRef.current = processor
 
-      const result = await window.electronAPI?.startCapture()
-      if (result?.success !== false) {
-        setIsCapturing(true)
-        setStatus('running')
-      }
+      setIsCapturing(true)
+      setStatus('running')
     } catch (err) {
       console.error('Failed to start system audio capture:', err)
+      await cleanupCapture()
       setStatus('error')
-      setErrorMsg(err instanceof Error ? err.message : '系统音频捕获失败')
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop())
-        streamRef.current = null
-      }
-      stopLevelMonitor()
+      setErrorMsg(err instanceof Error ? err.message : '系统音频捕获失败。')
       setIsCapturing(false)
     }
   }
 
   const stopCapture = async () => {
-    processorRef.current?.stop()
-    streamRef.current?.getTracks().forEach(t => t.stop())
-    processorRef.current = null
-    streamRef.current = null
-    stopLevelMonitor()
-    await window.electronAPI?.stopCapture()
+    await cleanupCapture()
     setIsCapturing(false)
     setStatus('idle')
     setErrorMsg('')
@@ -189,12 +210,11 @@ export default function SubtitleOverlay(): JSX.Element {
     }
   }
 
-  // 拖拽 — 使用 document 级全局监听器，防止快速拖拽时移出标题栏导致中断
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
+  const handleDragStart = useCallback((e: MouseEvent) => {
     isDragging.current = true
     lastPos.current = { x: e.screenX, y: e.screenY }
 
-    const onMouseMove = (ev: MouseEvent) => {
+    const onMouseMove = (ev: globalThis.MouseEvent) => {
       if (!isDragging.current) return
       const deltaX = ev.screenX - lastPos.current.x
       const deltaY = ev.screenY - lastPos.current.y
@@ -213,143 +233,105 @@ export default function SubtitleOverlay(): JSX.Element {
   }, [])
 
   const visibleSegments = segments.slice(-SUBTITLE_CONFIG.MAX_VISIBLE_SEGMENTS)
+  const statusText =
+    status === 'running' ? '系统音频' : status === 'connecting' ? '连接中' : status === 'error' ? '异常' : '待机'
 
   return (
-    <div
-      className="w-full h-full select-none rounded-2xl flex flex-col"
-      style={{
-        background: 'linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.65) 100%)',
-        backdropFilter: 'blur(24px)',
-        WebkitBackdropFilter: 'blur(24px)',
-        border: '1px solid rgba(255,255,255,0.08)',
-        boxShadow: '0 4px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)',
-        position: 'relative'
-      }}
-    >
-      {/* 标题栏 - 可拖拽 */}
+    <div className="flex h-full w-full select-none flex-col overflow-hidden rounded-lg border border-white/20 bg-neutral-950 text-white shadow-[0_8px_36px_rgba(0,0,0,0.6)]">
       <div
         onMouseDown={handleDragStart}
-        className="flex items-center justify-between px-4 py-2.5 cursor-grab active:cursor-grabbing"
+        className="flex h-9 shrink-0 cursor-grab items-center justify-between border-b border-white/20 px-3 active:cursor-grabbing"
         role="toolbar"
         aria-label="字幕窗口工具栏"
-        style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 10,
-          background: 'linear-gradient(180deg, rgba(20,20,20,0.95) 0%, rgba(10,10,10,0.85) 100%)',
-          backdropFilter: 'blur(16px)',
-          WebkitBackdropFilter: 'blur(16px)',
-          borderBottom: '1px solid rgba(255,255,255,0.12)',
-          borderTopLeftRadius: '1rem',
-          borderTopRightRadius: '1rem',
-          flexShrink: 0
-        }}
       >
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] font-semibold text-white/60 tracking-wider">
-            EchoSub
-          </span>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-[11px] font-semibold tracking-wide text-white/80">EchoSub</span>
           {isAsrOnly && (
-            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded" style={{ color: 'rgba(250, 204, 21, 0.8)', background: 'rgba(250, 204, 21, 0.1)', border: '1px solid rgba(250, 204, 21, 0.2)' }}>
+            <span className="rounded border border-amber-300/20 bg-amber-300/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-200/80">
               ASR 测试
             </span>
           )}
-          {isCapturing && (
-            <span className="text-[10px] font-medium flex items-center gap-1" style={{ color: 'rgba(74, 222, 128, 0.7)' }}>
-              <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: 'rgba(74, 222, 128, 0.8)' }} />
-              系统音频
-            </span>
-          )}
+          <span className="flex items-center gap-1.5 text-[10px] text-white/60">
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                status === 'running'
+                  ? 'bg-emerald-400'
+                  : status === 'connecting'
+                    ? 'animate-pulse bg-sky-300'
+                    : status === 'error'
+                      ? 'bg-red-300'
+                      : 'bg-white/40'
+              }`}
+            />
+            {statusText}
+          </span>
         </div>
-        <div className="flex items-center gap-1 opacity-30 hover:opacity-60 transition-opacity">
-          <button
-            onClick={handleToggleAlwaysOnTop}
-            className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${alwaysOnTop ? 'text-blue-400' : 'text-white/40'}`}
-            title={alwaysOnTop ? '取消置顶' : '始终置顶'}
-            aria-label={alwaysOnTop ? '取消置顶' : '始终置顶'}
-          >
-            {alwaysOnTop ? '📌' : '📍'}
-          </button>
-          <div className="w-4 h-1 rounded-full bg-white/50" />
-          <div className="w-4 h-1 rounded-full bg-white/50" />
-          <div className="w-4 h-1 rounded-full bg-white/50" />
-        </div>
+
+        <button
+          onClick={handleToggleAlwaysOnTop}
+          className={`h-6 rounded-md border px-2 text-[10px] transition ${
+            alwaysOnTop
+              ? 'border-sky-300/30 bg-sky-300/10 text-sky-100'
+              : 'border-white/10 bg-white/5 text-white/45 hover:text-white/70'
+          }`}
+          title={alwaysOnTop ? '取消置顶' : '始终置顶'}
+          aria-label={alwaysOnTop ? '取消置顶' : '始终置顶'}
+        >
+          置顶
+        </button>
       </div>
 
-      {/* 控制栏 */}
-      <div
-        className="flex items-center gap-2 px-4 py-2"
-        style={{
-          borderBottom: '1px solid rgba(255,255,255,0.06)',
-          flexShrink: 0,
-          background: 'rgba(0,0,0,0.2)'
-        }}
-      >
+      <div className="flex shrink-0 items-center gap-2 border-b border-white/20 bg-neutral-900 px-3 py-2">
         <button
           onClick={handleToggle}
-          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 flex items-center gap-1.5 ${
+          className={`flex h-7 w-[92px] items-center justify-center gap-1.5 rounded-md text-xs font-semibold transition ${
             isCapturing
-              ? 'bg-red-500/80 hover:bg-red-600 text-white'
-              : 'bg-blue-500/80 hover:bg-blue-600 text-white'
+              ? 'bg-red-400/85 text-white hover:bg-red-400'
+              : 'bg-sky-400/85 text-neutral-950 hover:bg-sky-300'
           }`}
-          style={{ minWidth: '96px', justifyContent: 'center' }}
           aria-label={isCapturing ? '停止' : isAsrOnly ? '开始识别' : '开始翻译'}
         >
-          {isCapturing ? (
-            <>
-              <span className="w-2.5 h-2.5 rounded-sm bg-white/80" />
-              停止
-            </>
-          ) : (
-            <>
-              <span className="text-sm">▶</span>
-              {isAsrOnly ? '开始识别' : '开始翻译'}
-            </>
-          )}
+          <span
+            className={`block ${
+              isCapturing ? 'h-2.5 w-2.5 rounded-sm bg-white/90' : 'h-0 w-0 border-y-[5px] border-l-[8px] border-y-transparent border-l-current'
+            }`}
+          />
+          {isCapturing ? '停止' : isAsrOnly ? '开始识别' : '开始翻译'}
         </button>
 
         <select
           value={sourceLanguage}
           onChange={(e) => handleLanguageChange(e.target.value)}
           disabled={isCapturing}
-          className="bg-white/5 text-white/80 text-xs rounded-lg px-2 py-1.5 outline-none cursor-pointer border border-white/10 hover:bg-white/10 transition-colors disabled:opacity-40"
-          style={{ minWidth: '90px' }}
+          className="h-7 rounded-md border border-white/20 bg-neutral-900 px-2 text-xs text-white/80 outline-none transition hover:border-white/30 disabled:opacity-40"
           aria-label="源语言"
         >
-          <option value="auto" style={{ background: '#1a1a1a' }}>自动检测</option>
-          <option value="en" style={{ background: '#1a1a1a' }}>English</option>
-          <option value="ja" style={{ background: '#1a1a1a' }}>日本語</option>
-          <option value="ko" style={{ background: '#1a1a1a' }}>한국어</option>
-          <option value="zh" style={{ background: '#1a1a1a' }}>中文</option>
-          <option value="fr" style={{ background: '#1a1a1a' }}>Français</option>
-          <option value="de" style={{ background: '#1a1a1a' }}>Deutsch</option>
-          <option value="es" style={{ background: '#1a1a1a' }}>Español</option>
-          <option value="ru" style={{ background: '#1a1a1a' }}>Русский</option>
+          {LANGUAGE_OPTIONS.map((lang) => (
+            <option key={lang.value} value={lang.value} className="bg-neutral-900">
+              {lang.label}
+            </option>
+          ))}
         </select>
 
-        {isCapturing && (
-          <div className="flex-1 flex items-center gap-1.5">
-            <div className="flex-1 bg-white/10 rounded-full h-1.5 overflow-hidden">
-              <div
-                className="h-full rounded-full transition-all duration-75"
-                style={{
-                  width: `${Math.max(audioLevel * 100, 2)}%`,
-                  background: audioLevel > 0.05
-                    ? 'linear-gradient(90deg, #22c55e, #4ade80)'
-                    : 'rgba(255,255,255,0.1)'
-                }}
-              />
-            </div>
-            <span className={`text-[10px] font-medium ${audioLevel > 0.05 ? 'text-green-400/70' : 'text-white/20'}`}>
-              {audioLevel > 0.05 ? '●' : '○'}
-            </span>
+        <div className="flex min-w-[84px] flex-1 items-center gap-2">
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/15">
+            <div
+              className="h-full rounded-full bg-emerald-300 transition-all duration-75"
+              style={{
+                width: `${isCapturing ? Math.max(audioLevel * 100, 3) : 0}%`,
+                opacity: audioLevel > 0.04 ? 0.95 : 0.35
+              }}
+            />
           </div>
-        )}
+          <span className="w-8 text-right text-[10px] tabular-nums text-white/50">
+            {isCapturing ? `${Math.round(audioLevel * 100)}%` : '--'}
+          </span>
+        </div>
 
         {!isCapturing && segments.length > 0 && (
           <button
             onClick={clearSegments}
-            className="text-[10px] text-white/30 hover:text-white/60 transition-colors px-2 py-1 rounded hover:bg-white/5"
+            className="h-7 rounded-md border border-white/20 px-2 text-[10px] text-white/60 transition hover:bg-white/10 hover:text-white/90"
             aria-label="清空字幕"
           >
             清空
@@ -357,79 +339,56 @@ export default function SubtitleOverlay(): JSX.Element {
         )}
       </div>
 
-      {/* 错误提示 */}
       {errorMsg && (
-        <div className="px-4 py-1.5 bg-red-500/10 border-b border-red-500/20 text-red-300 text-[10px]" style={{ flexShrink: 0 }}>
+        <div className="shrink-0 border-b border-red-300/20 bg-red-400/10 px-3 py-1 text-[11px] leading-5 text-red-100/90">
           {errorMsg}
         </div>
       )}
 
-      {/* 字幕滚动区 */}
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto px-4 pb-3 pt-1.5 space-y-1.5 scrollbar-hide"
+        className="scrollbar-hide min-h-0 flex-1 overflow-y-auto px-3 py-2"
         role="log"
         aria-live="polite"
         aria-label="翻译字幕"
       >
-        {visibleSegments.map((seg) => (
-          <div
-            key={seg.id}
-            className="animate-fadeIn rounded-xl px-3.5 py-2.5 transition-all"
-            style={{
-              backgroundColor: seg.status === 'corrected'
-                ? 'rgba(59, 130, 246, 0.15)'
-                : seg.status === 'partial'
-                  ? 'rgba(255, 255, 255, 0.05)'
-                  : 'rgba(255, 255, 255, 0.08)',
-              borderLeft: seg.status === 'partial'
-                ? '2px solid rgba(250, 204, 21, 0.6)'
-                : seg.status === 'corrected'
-                  ? '2px solid rgba(96, 165, 250, 0.6)'
-                  : '2px solid rgba(74, 222, 128, 0.4)',
-            }}
-          >
-            {seg.sourceText && seg.translatedText && seg.sourceText !== seg.translatedText && (
-              <div className="text-[11px] text-white/40 leading-relaxed mb-1">
-                {seg.sourceText}
-              </div>
-            )}
-            <div className="flex items-start gap-2">
-              <div
-                className="flex-1 text-[15px] font-medium leading-snug"
-                style={{
-                  color: 'rgba(255,255,255,0.95)',
-                  textShadow: '0 1px 3px rgba(0,0,0,0.7)'
-                }}
-              >
-                {seg.translatedText || seg.sourceText}
-                {seg.status === 'partial' && (
-                  <span className="inline-block w-1 h-4 bg-yellow-400/70 ml-1 animate-pulse rounded-sm" />
-                )}
-              </div>
-              {seg.status === 'partial' && (
-                <span className="w-1.5 h-1.5 rounded-full bg-yellow-400/80 mt-1.5 animate-pulse shrink-0" />
-              )}
-              {seg.status === 'corrected' && (
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-400/80 mt-1.5 shrink-0" />
-              )}
-            </div>
+        {visibleSegments.length === 0 ? (
+          <div className="flex h-full items-center justify-center text-xs text-white/50">
+            点击“{isAsrOnly ? '开始识别' : '开始翻译'}”启动
           </div>
-        ))}
-
-        <div ref={bottomRef} style={{ height: 1 }} />
-
-        {segments.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-6 opacity-30">
-            <svg className="w-7 h-7 mb-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: 'rgba(255,255,255,0.4)' }}>
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-              <line x1="12" y1="19" x2="12" y2="23" />
-              <line x1="8" y1="23" x2="16" y2="23" />
-            </svg>
-            <span className="text-xs text-white/30">点击「开始翻译」启动</span>
+        ) : (
+          <div className="space-y-1.5">
+            {visibleSegments.map((seg) => (
+              <div
+                key={seg.id}
+                className="animate-fadeIn border-b border-white/10 px-1 pb-2 last:border-b-0"
+              >
+                {seg.sourceText && seg.translatedText && seg.sourceText !== seg.translatedText && (
+                  <div className="mb-0.5 text-[11px] leading-relaxed text-white/60">{seg.sourceText}</div>
+                )}
+                <div className="flex items-start gap-2">
+                  <span
+                    className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${
+                      seg.status === 'partial'
+                        ? 'animate-pulse bg-amber-300'
+                        : seg.status === 'corrected'
+                          ? 'bg-sky-300'
+                          : 'bg-emerald-300/80'
+                    }`}
+                  />
+                  <div className="min-w-0 flex-1 text-[15px] font-medium leading-snug text-white/95 [text-shadow:0_1px_3px_rgba(0,0,0,0.65)]">
+                    {seg.translatedText || seg.sourceText}
+                    {seg.status === 'partial' && (
+                      <span className="ml-1 inline-block h-4 w-0.5 translate-y-0.5 animate-pulse rounded-sm bg-amber-300/80" />
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
+
+        <div ref={bottomRef} className="h-px" />
       </div>
     </div>
   )
