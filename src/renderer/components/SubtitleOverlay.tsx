@@ -4,7 +4,7 @@ import { AudioPCMProcessor } from './audio-processor'
 import { SUBTITLE_CONFIG } from '../../shared/config'
 
 export default function SubtitleOverlay(): JSX.Element {
-  const { segments, clearSegments } = useTranslationStore()
+  const { segments, clearSegments, isAsrOnly } = useTranslationStore()
   const scrollRef = useRef<HTMLDivElement>(null)
   const isDragging = useRef(false)
   const lastPos = useRef({ x: 0, y: 0 })
@@ -267,6 +267,11 @@ export default function SubtitleOverlay(): JSX.Element {
           <span className="text-[11px] font-semibold text-white/60 tracking-wider">
             EchoSub
           </span>
+          {isAsrOnly && (
+            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded" style={{ color: 'rgba(250, 204, 21, 0.8)', background: 'rgba(250, 204, 21, 0.1)', border: '1px solid rgba(250, 204, 21, 0.2)' }}>
+              ASR 测试
+            </span>
+          )}
           {isCapturing && (
             <span className="text-[10px] font-medium flex items-center gap-1" style={{ color: 'rgba(74, 222, 128, 0.7)' }}>
               <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: 'rgba(74, 222, 128, 0.8)' }} />

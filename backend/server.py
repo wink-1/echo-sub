@@ -39,6 +39,7 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 ASR_MODEL = os.environ.get("ASR_MODEL", "small")
+ASR_ONLY = os.environ.get("ASR_ONLY", "").lower() in ("1", "true", "yes")
 
 ws_active = False
 
@@ -53,7 +54,11 @@ async def websocket_endpoint(websocket: WebSocket):
 
     await websocket.accept()
     ws_active = True
-    await send_status(websocket, "connected", "Backend connected")
+    if ASR_ONLY:
+        await send_status(websocket, "asr_only", "ASR 测试模式 — 只识别不翻译")
+        logger.info("Running in ASR-only mode (no translation)")
+    else:
+        await send_status(websocket, "connected", "Backend connected")
 
     audio_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
     translation_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
@@ -66,9 +71,10 @@ async def websocket_endpoint(websocket: WebSocket):
         asr_task = asyncio.create_task(
             asr_worker(audio_queue, translation_queue, websocket, stop_event)
         )
-        translation_task = asyncio.create_task(
-            translation_worker(translation_queue, websocket, stop_event)
-        )
+        if not ASR_ONLY:
+            translation_task = asyncio.create_task(
+                translation_worker(translation_queue, websocket, stop_event)
+            )
 
         packet_count = 0
         last_log_time = 0
@@ -217,14 +223,15 @@ async def asr_worker(
             "data": {"id": seg_id, "text": new_text, "language": info.language}
         })
 
-        try:
-            translation_queue.put_nowait({
-                "segment_id": seg_id,
-                "source_text": new_text,
-                "language": info.language
-            })
-        except asyncio.QueueFull:
-            logger.warning("Translation queue full")
+        if not ASR_ONLY:
+            try:
+                translation_queue.put_nowait({
+                    "segment_id": seg_id,
+                    "source_text": new_text,
+                    "language": info.language
+                })
+            except asyncio.QueueFull:
+                logger.warning("Translation queue full")
 
 
 async def translation_worker(

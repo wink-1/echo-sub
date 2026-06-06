@@ -5,16 +5,19 @@ import { SUBTITLE_CONFIG } from '../../shared/config'
 interface TranslationState {
   segments: TranslationSegment[]
   isCapturing: boolean
+  isAsrOnly: boolean
   addSegment: (segment: TranslationSegment) => void
   updateSegment: (id: string, updates: Partial<TranslationSegment>) => void
   correctSegment: (id: string, correctedText: string) => void
   clearSegments: () => void
   setCapturing: (capturing: boolean) => void
+  setAsrOnly: (asrOnly: boolean) => void
 }
 
 export const useTranslationStore = create<TranslationState>((set) => ({
   segments: [],
   isCapturing: false,
+  isAsrOnly: false,
 
   addSegment: (segment) =>
     set((state) => {
@@ -56,5 +59,6 @@ export const useTranslationStore = create<TranslationState>((set) => ({
 
   clearSegments: () => set({ segments: [] }),
 
-  setCapturing: (capturing) => set({ isCapturing: capturing })
+  setCapturing: (capturing) => set({ isCapturing: capturing }),
+  setAsrOnly: (asrOnly) => set({ isAsrOnly: asrOnly }),
 }))

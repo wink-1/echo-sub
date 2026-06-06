@@ -29,15 +29,28 @@ export default function App(): JSX.Element {
       console.log('[App] Translation update:', msg.type, msg.data.text?.slice(0, 30))
 
       if (msg.type === 'asr_final') {
-        // ASR 最终结果：只设置原文，translatedText 设为空（等待翻译）
-        store.addSegment({
-          id: msg.data.id || `seg-${Date.now()}`,
-          sourceText: msg.data.text,
-          translatedText: '',
-          status: 'partial',
-          timestamp: Date.now(),
-          language: msg.data.language || 'en'
-        })
+        // ASR 最终结果
+        if (store.isAsrOnly) {
+          // ASR 测试模式：直接显示原文，状态为 confirmed
+          store.addSegment({
+            id: msg.data.id || `seg-${Date.now()}`,
+            sourceText: msg.data.text,
+            translatedText: msg.data.text,
+            status: 'confirmed',
+            timestamp: Date.now(),
+            language: msg.data.language || 'en',
+          })
+        } else {
+          // 正常模式：原文入队，等待翻译
+          store.addSegment({
+            id: msg.data.id || `seg-${Date.now()}`,
+            sourceText: msg.data.text,
+            translatedText: '',
+            status: 'partial',
+            timestamp: Date.now(),
+            language: msg.data.language || 'en',
+          })
+        }
       } else if (msg.type === 'translation_partial') {
         store.addSegment({
           id: msg.data.id || `seg-${Date.now()}`,
@@ -45,7 +58,7 @@ export default function App(): JSX.Element {
           translatedText: msg.data.text,
           status: 'partial',
           timestamp: Date.now(),
-          language: msg.data.language || 'en'
+          language: msg.data.language || 'en',
         })
       } else if (msg.type === 'translation_final') {
         store.addSegment({
@@ -54,7 +67,7 @@ export default function App(): JSX.Element {
           translatedText: msg.data.text,
           status: 'confirmed',
           timestamp: Date.now(),
-          language: msg.data.language || 'en'
+          language: msg.data.language || 'en',
         })
       } else {
         // 未处理的消息类型（如 asr_partial），静默跳过
@@ -76,9 +89,13 @@ export default function App(): JSX.Element {
       }
     })
 
-    // 监听后端状态
+    // 监听后端状态（检测 ASR 测试模式）
     const unsubStatus = window.electronAPI.onBackendStatus((status: string) => {
       console.log('[App] Backend status:', status)
+      if (status.startsWith('asr_only')) {
+        store.setAsrOnly(true)
+        console.log('[App] ASR-only mode activated — no translation will be performed')
+      }
     })
 
     return () => {
