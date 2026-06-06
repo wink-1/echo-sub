@@ -4,6 +4,7 @@ ASR 引擎 - 基于 faster-whisper 的流式语音识别
 """
 
 import os
+from dataclasses import dataclass
 import numpy as np
 from faster_whisper import WhisperModel
 
@@ -94,6 +95,9 @@ class ASREngine:
         self.total_audio_processed = 0
         self.forced_language = None  # None=auto, 'en'/'ja' 等强制语言
 
+        # 音频缓冲区最大样本数限制，防止长时间静默导致内存泄漏（最长 300 秒）
+        self.MAX_BUFFER_SAMPLES = 16000 * 300
+
         print(f"ASR engine ready: {model_size} on {self.device} ({self.compute_type})")
 
     def transcribe_chunk(self, audio: np.ndarray) -> tuple:
@@ -109,6 +113,13 @@ class ASREngine:
         # 累积到缓冲区
         self.audio_buffer = np.concatenate([self.audio_buffer, audio])
         buffer_len = len(self.audio_buffer)
+
+        # 缓冲区上限保护：防止长时间静默导致内存无限增长
+        if buffer_len > self.MAX_BUFFER_SAMPLES:
+            keep = int(self.sample_rate * self.overlap_seconds)
+            self.audio_buffer = self.audio_buffer[-keep:]
+            print(f"[ASR] Buffer capped to {keep} samples (was {buffer_len})")
+            buffer_len = keep
 
         # 缓冲区不足,等待更多音频
         if buffer_len < self.min_chunk_size:
@@ -220,6 +231,13 @@ class ASREngine:
         print("[ASR] Buffer reset")
 
 
-def _info_stub(lang: str = "en"):
+@dataclass
+class ASRInfo:
+    """ASR 识别结果元信息"""
+    language: str = "en"
+    language_probability: float = 0.0
+
+
+def _info_stub(lang: str = "en") -> ASRInfo:
     """创建占位 info 对象"""
-    return type("Info", (), {"language": lang, "language_probability": 0.0})
+    return ASRInfo(language=lang, language_probability=0.0)

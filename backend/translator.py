@@ -12,6 +12,13 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"
 TIMEOUT_SECONDS = 60
 
+# 语言名称映射表
+LANG_NAMES: dict[str, str] = {
+    "en": "英文", "ja": "日文", "ko": "韩文",
+    "fr": "法文", "de": "德文", "es": "西班牙文",
+    "ru": "俄文", "zh": "中文",
+}
+
 # 针对同声传译场景优化的翻译 Prompt
 TRANSLATION_PROMPT = """你是一位资深同声传译员，正在为国际会议提供实时翻译。
 
@@ -74,12 +81,7 @@ class Translator:
         if not text.strip():
             return ""
 
-        lang_names = {
-            "en": "英文", "ja": "日文", "ko": "韩文",
-            "fr": "法文", "de": "德文", "es": "西班牙文",
-            "ru": "俄文", "zh": "中文",
-        }
-        source_lang_name = lang_names.get(source_lang, "外文")
+        source_lang_name = LANG_NAMES.get(source_lang, "外文")
 
         if self.context_history:
             context_str = "\n".join(self.context_history[-self.MAX_CONTEXT:])
@@ -117,12 +119,7 @@ class Translator:
             yield ""
             return
 
-        lang_names = {
-            "en": "英文", "ja": "日文", "ko": "韩文",
-            "fr": "法文", "de": "德文", "es": "西班牙文",
-            "ru": "俄文", "zh": "中文",
-        }
-        source_lang_name = lang_names.get(source_lang, "外文")
+        source_lang_name = LANG_NAMES.get(source_lang, "外文")
 
         if self.context_history:
             context_str = "\n".join(self.context_history[-self.MAX_CONTEXT:])

@@ -16,6 +16,16 @@ let lastLogTime = 0
 export function setWebSocketConnection(ws: WebSocket): void {
   wsConnection = ws
   packetsSent = 0
+  // 监听 WebSocket 关闭，自动同步捕获状态
+  ws.onclose = () => {
+    if (wsConnection === ws) {
+      wsConnection = null
+      if (isCapturing) {
+        console.log('Audio capture: WebSocket closed, stopping capture')
+        isCapturing = false
+      }
+    }
+  }
   console.log('Audio capture: WebSocket connection set')
 }
 

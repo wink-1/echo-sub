@@ -1,6 +1,32 @@
 import { create } from 'zustand'
 import { TranslationSegment } from '../../shared/types'
 
+const STORAGE_KEY = 'echosub-translation-history'
+
+function loadFromStorage(): TranslationSegment[] {
+  try {
+    const data = localStorage.getItem(STORAGE_KEY)
+    if (data) {
+      return JSON.parse(data)
+    }
+  } catch (e) {
+    console.warn('Failed to load translation history:', e)
+  }
+  return []
+}
+
+function saveToStorage(segments: TranslationSegment[]): void {
+  try {
+    // 只持久化已确认和已纠错的段落（过滤掉 partial 状态的）
+    const persistable = segments.filter(s => s.status !== 'partial')
+    if (persistable.length > 0) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable.slice(-50)))
+    }
+  } catch (e) {
+    console.warn('Failed to save translation history:', e)
+  }
+}
+
 interface TranslationState {
   segments: TranslationSegment[]
   isCapturing: boolean
@@ -12,15 +38,15 @@ interface TranslationState {
 }
 
 export const useTranslationStore = create<TranslationState>((set) => ({
-  segments: [],
+  segments: loadFromStorage(),
   isCapturing: false,
 
   addSegment: (segment) =>
     set((state) => {
       const index = state.segments.findIndex((s) => s.id === segment.id)
+      let newSegments: TranslationSegment[]
       if (index >= 0) {
-        // 更新已有段落 - 保留已有翻译，只更新新值
-        const newSegments = [...state.segments]
+        newSegments = [...state.segments]
         const old = newSegments[index]
         newSegments[index] = {
           ...old,
@@ -29,24 +55,25 @@ export const useTranslationStore = create<TranslationState>((set) => ({
           status: segment.status || old.status,
           language: segment.language || old.language,
         }
-        return { segments: newSegments }
+      } else {
+        newSegments = [...state.segments, segment].slice(-50)
       }
-      // 保留最近 50 段
-      return { segments: [...state.segments, segment].slice(-50) }
+      // confirmed/corrected 状态时保存到 localStorage
+      if (segment.status === 'confirmed' || segment.status === 'corrected') {
+        saveToStorage(newSegments)
+      }
+      return { segments: newSegments }
     }),
 
   updateSegment: (id, updates) =>
     set((state) => {
       const index = state.segments.findIndex((s) => s.id === id)
+      let newSegments: TranslationSegment[]
       if (index >= 0) {
-        // 更新已有段落
-        const newSegments = [...state.segments]
+        newSegments = [...state.segments]
         newSegments[index] = { ...newSegments[index], ...updates }
-        return { segments: newSegments }
-      }
-      // 找不到对应段落，添加新段落
-      return {
-        segments: [
+      } else {
+        newSegments = [
           ...state.segments,
           {
             id,
@@ -58,18 +85,27 @@ export const useTranslationStore = create<TranslationState>((set) => ({
           }
         ].slice(-50)
       }
+      if (updates.status === 'confirmed' || updates.status === 'corrected') {
+        saveToStorage(newSegments)
+      }
+      return { segments: newSegments }
     }),
 
   correctSegment: (id, correctedText) =>
-    set((state) => ({
-      segments: state.segments.map((s) =>
+    set((state) => {
+      const newSegments = state.segments.map((s) =>
         s.id === id
           ? { ...s, translatedText: correctedText, status: 'corrected' as const }
           : s
       )
-    })),
+      saveToStorage(newSegments)
+      return { segments: newSegments }
+    }),
 
-  clearSegments: () => set({ segments: [] }),
+  clearSegments: () => {
+    try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
+    set({ segments: [] })
+  },
 
   setCapturing: (capturing) => set({ isCapturing: capturing })
 }))
