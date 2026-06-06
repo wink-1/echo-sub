@@ -4,21 +4,48 @@ import ErrorBoundary from './components/ErrorBoundary'
 import { useTranslationStore, ASR_LIVE_ID } from './stores/translationStore'
 
 /**
- * 从累积文本中提取增量部分。
- * ASR/翻译后端经常发送累积文本（每次都包含从开始到当前的全部内容），
- * 此函数对比上次已确认的边界，只返回新增的部分。
+ * 从新文本中提取增量内容，支持三种 ASR 后端输出模式：
  *
- * 例如:  prev="Hello."  current="Hello. World."
- *        → 返回 "World."
+ * 1. 累积模式：newText 以 prevText 为前缀，只需截取尾部
+ *    prev="Hello."  current="Hello. World."  → "World."
+ *
+ * 2. 重叠模式：newText 的开头与 prevText 的尾部有重叠（ASR 为翻译模型提供上下文）
+ *    prev="...serving others. The psychologist"
+ *    current="The psychologist Dan McAdams calls this..."  → "Dan McAdams calls this..."
+ *    通过逐词从 prevText 尾部向头部搜索，找到最长重叠后提取增量。
+ *
+ * 3. 无重叠：ASR 大范围修正或重启，直接使用全文。
  */
-function extractIncrement(current: string, prev: string): string {
-  if (!prev) return current
-  if (current.startsWith(prev)) {
-    const suffix = current.slice(prev.length).trim()
-    return suffix || current // 无增量时保留原文（可能是 ASR 修正）
+function extractNewContent(newText: string, prevText: string): string {
+  if (!prevText) return newText.trim()
+
+  const trimmedNew = newText.trim()
+  const trimmedPrev = prevText.trim()
+
+  // 模式 1: 纯累积 — 新文本以旧文本为前缀
+  if (trimmedNew.startsWith(trimmedPrev)) {
+    const suffix = trimmedNew.slice(trimmedPrev.length).trim()
+    return suffix || trimmedNew // 无增量时保留原文（可能是 ASR 小修正）
   }
-  // 不以旧文本开头 → ASR 可能做了大范围修正，直接使用全文
-  return current
+
+  // 模式 2: 重叠 — prevText 尾部与 newText 头部有共同片段
+  // 从 prevText 尾部取词（最多取最后 ~50 词），逐个缩短寻找与 newText 开头的重叠
+  const prevWords = trimmedPrev.split(/\s+/)
+  const newWords = trimmedNew.split(/\s+/)
+  const maxOverlapWords = Math.min(prevWords.length, 50)
+
+  for (let overlapLen = maxOverlapWords; overlapLen >= 1; overlapLen--) {
+    const overlapCandidate = prevWords.slice(-overlapLen).join(' ')
+    if (overlapCandidate && trimmedNew.startsWith(overlapCandidate)) {
+      const afterOverlap = trimmedNew.slice(overlapCandidate.length).trim()
+      if (afterOverlap) return afterOverlap
+      // 整段都是重叠 → 无新内容
+      return ''
+    }
+  }
+
+  // 模式 3: 无重叠 → ASR 可能做了大修正，返回全文
+  return trimmedNew
 }
 
 export default function App(): JSX.Element {
@@ -52,7 +79,7 @@ export default function App(): JSX.Element {
 
       if (msg.type === 'asr_partial') {
         // ASR 实时识别中间结果 → 只显示增量部分
-        const newPartial = extractIncrement(msg.data.text, lastAsrText)
+        const newPartial = extractNewContent(msg.data.text, lastAsrText)
         if (newPartial) {
           store.addSegment({
             id: ASR_LIVE_ID,
@@ -67,7 +94,7 @@ export default function App(): JSX.Element {
         // ASR 最终结果 → 清除实时占位段，提取增量创建正式段
         store.removeSegment(ASR_LIVE_ID)
 
-        const newSource = extractIncrement(msg.data.text, lastAsrText)
+        const newSource = extractNewContent(msg.data.text, lastAsrText)
         // 更新累积边界（无论是否有增量，都要更新以追踪最新全文）
         lastAsrText = msg.data.text
 
@@ -103,7 +130,7 @@ export default function App(): JSX.Element {
         store.removeSegment(ASR_LIVE_ID)
 
         const fullTranslation = msg.data.text
-        const newTranslation = extractIncrement(fullTranslation, lastTranslationText)
+        const newTranslation = extractNewContent(fullTranslation, lastTranslationText)
         // 更新累积翻译边界
         lastTranslationText = fullTranslation
 
@@ -128,7 +155,7 @@ export default function App(): JSX.Element {
         } else {
           // 没有等待段 → 用增量原文 + 增量翻译创建新段
           const originalText = msg.data.originalText || ''
-          const newOriginal = extractIncrement(originalText, lastAsrText)
+          const newOriginal = extractNewContent(originalText, lastAsrText)
           store.addSegment({
             id: msg.data.id || `seg-${Date.now()}`,
             sourceText: newOriginal || originalText,
