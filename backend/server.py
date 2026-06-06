@@ -63,12 +63,12 @@ async def websocket_endpoint(websocket: WebSocket):
     translation_task = None
 
     try:
-    asr_task = asyncio.create_task(
-        asr_worker(audio_queue, translation_queue, websocket, stop_event)
-    )
-    translation_task = asyncio.create_task(
-        translation_worker(translation_queue, websocket, stop_event)
-    )
+        asr_task = asyncio.create_task(
+            asr_worker(audio_queue, translation_queue, websocket, stop_event)
+        )
+        translation_task = asyncio.create_task(
+            translation_worker(translation_queue, websocket, stop_event)
+        )
 
         packet_count = 0
         last_log_time = 0
