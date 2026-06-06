@@ -4,6 +4,9 @@ EchoSub Python 后端 - FastAPI WebSocket 服务器
 
 停顿检测策略: 当 >600ms 无新音频到达时 (说话人停顿), 立即处理缓冲区并发送 asr_final;
 说话中则在缓冲区达到最小长度时发送 asr_partial 提供实时反馈。
+
+停顿提升: 如果停顿出现但缓冲区太小无法处理, 将最后一个 asr_partial 提升为 asr_final
+以确保该语句被翻译 — 避免语句只显示但不翻译的问题。
 """
 
 import asyncio
@@ -172,6 +175,12 @@ async def asr_worker(
     accumulated_text = ""
     last_audio_time = time.monotonic()
 
+    # 停顿提升追踪：记录最后一个 asr_partial，当停顿出现但缓冲区不足时提升为 final
+    last_partial_text = ""
+    last_partial_id = ""
+    last_partial_language = ""
+    last_partial_full_text = ""
+
     while not stop_event.is_set():
         try:
             chunk = await asyncio.wait_for(audio_queue.get(), timeout=0.1)
@@ -183,6 +192,36 @@ async def asr_worker(
         buffer_len = len(audio_buffer)
         time_since_audio = time.monotonic() - last_audio_time
         is_pause = time_since_audio > PAUSE_THRESHOLD_SECONDS
+
+        # 停顿提升：如果停顿出现但缓冲区太小无法处理，
+        # 将最后一个 partial 提升为 final 以确保该语句被翻译
+        if is_pause and buffer_len < min_speech_for_pause and last_partial_text:
+            logger.info(f"[pause-promote] '{last_partial_text[:30]}' → final")
+            await safe_send_json(websocket, {
+                "type": "asr_final",
+                "data": {
+                    "id": last_partial_id,
+                    "text": last_partial_text,
+                    "fullText": last_partial_full_text,
+                    "language": last_partial_language
+                }
+            })
+            if not ASR_ONLY:
+                try:
+                    translation_queue.put_nowait({
+                        "segment_id": last_partial_id,
+                        "source_text": last_partial_text,
+                        "language": last_partial_language
+                    })
+                except asyncio.QueueFull:
+                    logger.warning("Translation queue full")
+            # 清除追踪并重置时间（避免重复触发）
+            last_partial_text = ""
+            last_partial_id = ""
+            last_partial_language = ""
+            last_partial_full_text = ""
+            last_audio_time = time.monotonic()
+            continue
 
         # 决定是否处理缓冲区:
         # 1. 缓冲区达到最小长度 → 处理 (说话中，发 asr_partial)
@@ -243,21 +282,33 @@ async def asr_worker(
         msg_type = "asr_final" if is_final else "asr_partial"
         logger.info(f"[{msg_type}] {new_text} (lang={info.language}, id={seg_id}, pause={is_pause:.2f}s)")
 
+        # 发送消息 — 同时附带 fullText (完整 whisper 输出) 供前端实时显示
         await safe_send_json(websocket, {
             "type": msg_type,
-            "data": {"id": seg_id, "text": new_text, "language": info.language}
+            "data": {"id": seg_id, "text": new_text, "fullText": full_text, "language": info.language}
         })
 
-        # 只有 asr_final 才送翻译队列（完整句子才翻译，partial 不翻译）
-        if is_final and not ASR_ONLY:
-            try:
-                translation_queue.put_nowait({
-                    "segment_id": seg_id,
-                    "source_text": new_text,
-                    "language": info.language
-                })
-            except asyncio.QueueFull:
-                logger.warning("Translation queue full")
+        if is_final:
+            # final → 送翻译队列，清除 partial 追踪
+            if not ASR_ONLY:
+                try:
+                    translation_queue.put_nowait({
+                        "segment_id": seg_id,
+                        "source_text": new_text,
+                        "language": info.language
+                    })
+                except asyncio.QueueFull:
+                    logger.warning("Translation queue full")
+            last_partial_text = ""
+            last_partial_id = ""
+            last_partial_language = ""
+            last_partial_full_text = ""
+        else:
+            # partial → 追踪以便停顿提升
+            last_partial_text = new_text
+            last_partial_id = seg_id
+            last_partial_language = info.language
+            last_partial_full_text = full_text
 
 
 def _extract_increment(full_text: str, accumulated: str) -> str:

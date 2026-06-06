@@ -29,6 +29,8 @@ export interface BackendMessage {
   data: {
     id?: string
     text: string
+    /** whisper 完整输出（asr_partial 用于实时显示完整语句进度） */
+    fullText?: string
     language?: string
     originalText?: string
     correctedText?: string

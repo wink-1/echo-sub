@@ -1,4 +1,13 @@
-import { app, ipcMain, Tray, Menu, nativeImage, systemPreferences } from 'electron'
+import {
+  app,
+  desktopCapturer,
+  ipcMain,
+  Menu,
+  nativeImage,
+  session,
+  systemPreferences,
+  Tray
+} from 'electron'
 import { join } from 'path'
 import { startPythonBackend, stopPythonBackend } from './python-bridge'
 import { createSubtitleWindow, closeSubtitleWindow, getSubtitleWindow } from './subtitle-window'
@@ -15,6 +24,32 @@ const defaultSettings: AppSettings = Object.freeze({
   showBilingual: true,
   windowOpacity: 0.85
 })
+
+function registerDisplayMediaHandler(): void {
+  if (process.platform !== 'win32') return
+
+  session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 0, height: 0 }
+      })
+      const screenSource = sources[0]
+
+      if (!screenSource) {
+        console.warn('Display media request denied: no screen sources found')
+        callback({})
+        return
+      }
+
+      console.log('Display media source selected:', screenSource.id, screenSource.name)
+      callback({ video: screenSource, audio: 'loopback' })
+    } catch (error) {
+      console.error('Failed to resolve display media source:', error)
+      callback({})
+    }
+  })
+}
 
 function createTrayIcon(): Electron.NativeImage {
   // 程序化创建 16x16 托盘图标（FM 电台波形图案）
@@ -100,6 +135,8 @@ process.on('unhandledRejection', (reason) => {
 })
 
 app.whenReady().then(async () => {
+  registerDisplayMediaHandler()
+
   // 注册音频 PCM 数据转发 IPC
   registerAudioIpcHandlers()
 
