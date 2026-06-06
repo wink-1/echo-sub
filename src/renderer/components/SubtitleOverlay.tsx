@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useTranslationStore } from '../stores/translationStore'
 import { AudioPCMProcessor } from './audio-processor'
+import { SUBTITLE_CONFIG } from '../../shared/config'
 
 export default function SubtitleOverlay(): JSX.Element {
   const { segments, clearSegments } = useTranslationStore()
@@ -20,11 +21,15 @@ export default function SubtitleOverlay(): JSX.Element {
   const processorRef = useRef<AudioPCMProcessor | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
+  const levelCtxRef = useRef<AudioContext | null>(null)
+  const levelSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const animFrameRef = useRef<number>(0)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  // 自动滚动到底部
+  // 自动滚动到底部（仅在 confirmed 段落更新时触发，避免 partial 频繁滚动）
   useEffect(() => {
+    const lastSeg = segments[segments.length - 1]
+    if (!lastSeg || lastSeg.status !== 'confirmed') return
     const timer = setTimeout(() => {
       bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
     }, 50)
@@ -38,6 +43,8 @@ export default function SubtitleOverlay(): JSX.Element {
     const analyser = ctx.createAnalyser()
     analyser.fftSize = 256
     source.connect(analyser)
+    levelCtxRef.current = ctx
+    levelSourceRef.current = source
     analyserRef.current = analyser
     const dataArray = new Uint8Array(analyser.frequencyBinCount)
     const tick = () => {
@@ -51,6 +58,13 @@ export default function SubtitleOverlay(): JSX.Element {
 
   const stopLevelMonitor = () => {
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+    if (levelSourceRef.current) levelSourceRef.current.disconnect()
+    if (analyserRef.current) analyserRef.current.disconnect()
+    if (levelCtxRef.current) {
+      levelCtxRef.current.close()
+      levelCtxRef.current = null
+    }
+    levelSourceRef.current = null
     analyserRef.current = null
     setAudioLevel(0)
   }
@@ -66,41 +80,54 @@ export default function SubtitleOverlay(): JSX.Element {
     let source: 'system' | 'microphone' = 'microphone'
 
     try {
-      const sourceId = await window.electronAPI?.getSystemAudioSource()
-      if (!sourceId) throw new Error('无可用音频源')
+      try {
+        const sourceId = await window.electronAPI?.getSystemAudioSource()
+        if (!sourceId) throw new Error('无可用音频源')
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId }
-        } as unknown as MediaTrackConstraints,
-        video: {
-          mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId, maxWidth: 1, maxHeight: 1 }
-        } as unknown as MediaTrackConstraints
-      })
-      stream.getVideoTracks().forEach(t => t.stop())
-      if (stream.getAudioTracks().length === 0) throw new Error('无音频轨道')
-      source = 'system'
-      streamRef.current = stream
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId }
+          } as unknown as MediaTrackConstraints,
+          video: {
+            mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId, maxWidth: 1, maxHeight: 1 }
+          } as unknown as MediaTrackConstraints
+        })
+        stream.getVideoTracks().forEach(t => t.stop())
+        if (stream.getAudioTracks().length === 0) throw new Error('无音频轨道')
+        source = 'system'
+        streamRef.current = stream
+      } catch (err) {
+        console.warn('System audio failed, falling back to mic:', err)
+        const micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        })
+        streamRef.current = micStream
+      }
+
+      setAudioSource(source)
+      window.electronAPI?.reportAudioSource?.(source)
+
+      startLevelMonitor(streamRef.current!)
+      const processor = new AudioPCMProcessor()
+      await processor.start(streamRef.current!)
+      processorRef.current = processor
+
+      const result = await window.electronAPI?.startCapture()
+      if (result?.success !== false) {
+        setIsCapturing(true)
+        setStatus('running')
+      }
     } catch (err) {
-      console.warn('System audio failed, falling back to mic:', err)
-      const micStream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-      })
-      streamRef.current = micStream
-    }
-
-    setAudioSource(source)
-    window.electronAPI?.reportAudioSource?.(source)
-
-    startLevelMonitor(streamRef.current!)
-    const processor = new AudioPCMProcessor()
-    await processor.start(streamRef.current!)
-    processorRef.current = processor
-
-    const result = await window.electronAPI?.startCapture()
-    if (result?.success !== false) {
-      setIsCapturing(true)
-      setStatus('running')
+      console.error('Failed to start audio capture:', err)
+      setStatus('error')
+      setErrorMsg(err instanceof Error ? err.message : '音频启动失败，请检查权限设置')
+      // 清理已获取的资源
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop())
+        streamRef.current = null
+      }
+      stopLevelMonitor()
+      setIsCapturing(false)
     }
   }
 
@@ -155,7 +182,7 @@ export default function SubtitleOverlay(): JSX.Element {
     document.addEventListener('mouseup', onMouseUp)
   }, [])
 
-  const visibleSegments = segments.slice(-8)
+  const visibleSegments = segments.slice(-SUBTITLE_CONFIG.MAX_VISIBLE_SEGMENTS)
 
   return (
     <div
@@ -173,6 +200,8 @@ export default function SubtitleOverlay(): JSX.Element {
       <div
         onMouseDown={handleDragStart}
         className="flex items-center justify-between px-4 py-2.5 cursor-grab active:cursor-grabbing"
+        role="toolbar"
+        aria-label="字幕窗口工具栏"
         style={{
           position: 'sticky',
           top: 0,
@@ -202,6 +231,7 @@ export default function SubtitleOverlay(): JSX.Element {
             onClick={handleToggleAlwaysOnTop}
             className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${alwaysOnTop ? 'text-blue-400' : 'text-white/40'}`}
             title={alwaysOnTop ? '取消置顶' : '始终置顶'}
+            aria-label={alwaysOnTop ? '取消置顶' : '始终置顶'}
           >
             {alwaysOnTop ? '📌' : '📍'}
           </button>
@@ -228,6 +258,7 @@ export default function SubtitleOverlay(): JSX.Element {
               : 'bg-blue-500/80 hover:bg-blue-600 text-white'
           }`}
           style={{ minWidth: '90px', justifyContent: 'center' }}
+          aria-label={isCapturing ? '停止翻译' : '开始翻译'}
         >
           {isCapturing ? (
             <>
@@ -248,6 +279,7 @@ export default function SubtitleOverlay(): JSX.Element {
           disabled={isCapturing}
           className="bg-white/5 text-white/80 text-xs rounded-lg px-2 py-1.5 outline-none cursor-pointer border border-white/10 hover:bg-white/10 transition-colors disabled:opacity-40"
           style={{ minWidth: '90px' }}
+          aria-label="源语言"
         >
           <option value="auto" style={{ background: '#1a1a1a' }}>自动检测</option>
           <option value="en" style={{ background: '#1a1a1a' }}>English</option>
@@ -283,6 +315,7 @@ export default function SubtitleOverlay(): JSX.Element {
           <button
             onClick={clearSegments}
             className="text-[10px] text-white/30 hover:text-white/60 transition-colors px-2 py-1 rounded hover:bg-white/5"
+            aria-label="清空字幕"
           >
             清空
           </button>
@@ -300,6 +333,9 @@ export default function SubtitleOverlay(): JSX.Element {
       <div
         ref={scrollRef}
         className="flex-1 min-h-0 overflow-y-auto px-4 pb-3 pt-1.5 space-y-1.5 scrollbar-hide"
+        role="log"
+        aria-live="polite"
+        aria-label="翻译字幕"
       >
         {visibleSegments.map((seg) => (
           <div

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { TranslationSegment } from '../../shared/types'
+import { SUBTITLE_CONFIG } from '../../shared/config'
 
 interface TranslationState {
   segments: TranslationSegment[]
@@ -23,14 +24,14 @@ export const useTranslationStore = create<TranslationState>((set) => ({
         const old = newSegments[index]
         newSegments[index] = {
           ...old,
-          sourceText: segment.sourceText || old.sourceText,
-          translatedText: segment.translatedText || old.translatedText,
-          status: segment.status || old.status,
-          language: segment.language || old.language,
+          sourceText: segment.sourceText ?? old.sourceText,
+          translatedText: segment.translatedText ?? old.translatedText,
+          status: segment.status ?? old.status,
+          language: segment.language ?? old.language,
         }
         return { segments: newSegments }
       }
-      return { segments: [...state.segments, segment].slice(-50) }
+      return { segments: [...state.segments, segment].slice(-SUBTITLE_CONFIG.MAX_STORED_SEGMENTS) }
     }),
 
   updateSegment: (id, updates) =>
@@ -41,19 +42,7 @@ export const useTranslationStore = create<TranslationState>((set) => ({
         newSegments[index] = { ...newSegments[index], ...updates }
         return { segments: newSegments }
       }
-      return {
-        segments: [
-          ...state.segments,
-          {
-            id,
-            sourceText: updates.sourceText || '',
-            translatedText: updates.translatedText || '',
-            status: updates.status || 'confirmed',
-            timestamp: Date.now(),
-            language: updates.language || 'en'
-          }
-        ].slice(-50)
-      }
+      return state
     }),
 
   correctSegment: (id, correctedText) =>

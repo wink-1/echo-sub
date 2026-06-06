@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } from 'electron'
+import { app, ipcMain, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { startPythonBackend, stopPythonBackend } from './python-bridge'
 import { createSubtitleWindow, closeSubtitleWindow, getSubtitleWindow } from './subtitle-window'
@@ -6,16 +6,15 @@ import { startAudioCapture, stopAudioCapture, registerAudioIpcHandlers } from '.
 import { registerIpcHandlers } from './ipc-handlers'
 import { AppSettings } from '../shared/types'
 
-let subtitleWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 
-const defaultSettings: AppSettings = {
+const defaultSettings: AppSettings = Object.freeze({
   sourceLanguage: 'auto',
   targetLanguage: 'zh',
   fontSize: 24,
   showBilingual: true,
   windowOpacity: 0.85
-}
+})
 
 function createTrayIcon(): Electron.NativeImage {
   // 程序化创建 16x16 托盘图标（FM 电台波形图案）
@@ -56,15 +55,15 @@ function createTray(): void {
     {
       label: '显示/隐藏字幕窗口',
       click: () => {
-        if (subtitleWindow && !subtitleWindow.isDestroyed()) {
-          if (subtitleWindow.isVisible()) {
-            subtitleWindow.hide()
+        const win = getSubtitleWindow()
+        if (win && !win.isDestroyed()) {
+          if (win.isVisible()) {
+            win.hide()
           } else {
-            subtitleWindow.show()
+            win.show()
           }
         } else {
-          subtitleWindow = createSubtitleWindow()
-          registerIpcHandlers(defaultSettings, subtitleWindow)
+          createSubtitleWindow()
         }
       }
     },
@@ -81,15 +80,24 @@ function createTray(): void {
 
   tray.setContextMenu(contextMenu)
   tray.on('click', () => {
-    if (subtitleWindow && !subtitleWindow.isDestroyed()) {
-      if (subtitleWindow.isVisible()) {
-        subtitleWindow.hide()
+    const win = getSubtitleWindow()
+    if (win && !win.isDestroyed()) {
+      if (win.isVisible()) {
+        win.hide()
       } else {
-        subtitleWindow.show()
+        win.show()
       }
     }
   })
 }
+
+// 全局异常处理：记录未捕获错误，避免静默崩溃
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled Rejection:', reason)
+})
 
 app.whenReady().then(async () => {
   // 注册音频 PCM 数据转发 IPC
@@ -99,9 +107,9 @@ app.whenReady().then(async () => {
   await startPythonBackend()
 
   // 只创建字幕悬浮窗
-  subtitleWindow = createSubtitleWindow()
+  const subtitleWindow = createSubtitleWindow()
 
-  // 注册 IPC 处理器
+  // 注册 IPC 处理器（仅一次）
   registerIpcHandlers(defaultSettings, subtitleWindow)
 
   // 系统托盘
@@ -109,28 +117,30 @@ app.whenReady().then(async () => {
 
   // 字幕悬浮窗控制
   ipcMain.handle('open-subtitle-window', () => {
-    if (!subtitleWindow || subtitleWindow.isDestroyed()) {
-      subtitleWindow = createSubtitleWindow()
+    let win = getSubtitleWindow()
+    if (!win || win.isDestroyed()) {
+      win = createSubtitleWindow()
     }
-    subtitleWindow.show()
+    win.show()
     return { success: true }
   })
 
   ipcMain.handle('close-subtitle-window', () => {
     closeSubtitleWindow()
-    subtitleWindow = null
     return { success: true }
   })
 
   ipcMain.handle('is-subtitle-window-open', () => {
-    return subtitleWindow !== null && !subtitleWindow.isDestroyed()
+    const win = getSubtitleWindow()
+    return win !== null && !win.isDestroyed()
   })
 
   // 始终置顶切换
   ipcMain.handle('toggle-always-on-top', () => {
-    if (subtitleWindow && !subtitleWindow.isDestroyed()) {
-      const current = subtitleWindow.isAlwaysOnTop()
-      subtitleWindow.setAlwaysOnTop(!current)
+    const win = getSubtitleWindow()
+    if (win && !win.isDestroyed()) {
+      const current = win.isAlwaysOnTop()
+      win.setAlwaysOnTop(!current)
       return { alwaysOnTop: !current }
     }
     return { alwaysOnTop: false }
@@ -138,9 +148,9 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  stopAudioCapture()
-  stopPythonBackend()
   if (process.platform !== 'darwin') {
+    stopAudioCapture()
+    stopPythonBackend()
     app.quit()
   }
 })
@@ -149,5 +159,3 @@ app.on('before-quit', () => {
   stopAudioCapture()
   stopPythonBackend()
 })
-
-export { subtitleWindow, defaultSettings }

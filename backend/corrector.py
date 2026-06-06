@@ -2,8 +2,11 @@
 纠错模块 - DeepSeek API 翻译审校
 """
 
+import logging
 import os
 import httpx
+
+logger = logging.getLogger(__name__)
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"
@@ -68,12 +71,12 @@ class Corrector:
             changed = corrected != current_translation
 
             if changed:
-                print(f"[Corrector] Corrected: '{current_translation}' -> '{corrected}'")
+                logger.info(f"Corrected: '{current_translation}' -> '{corrected}'")
 
             return {"corrected": corrected, "changed": changed}
 
         except Exception as e:
-            print(f"Correction error: {e}")
+            logger.error(f"Correction error: {e}")
             return {"corrected": current_translation, "changed": False}
 
     async def _call_deepseek(self, prompt: str) -> str:

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import SubtitleOverlay from './components/SubtitleOverlay'
+import ErrorBoundary from './components/ErrorBoundary'
 import { useTranslationStore } from './stores/translationStore'
 
 export default function App(): JSX.Element {
@@ -55,6 +56,9 @@ export default function App(): JSX.Element {
           timestamp: Date.now(),
           language: msg.data.language || 'en'
         })
+      } else {
+        // 未处理的消息类型（如 asr_partial），静默跳过
+        console.debug('[App] Unhandled message type:', msg.type)
       }
     })
 
@@ -86,5 +90,9 @@ export default function App(): JSX.Element {
   }, [])
 
   // 始终显示字幕浮窗（唯一窗口）
-  return <SubtitleOverlay />
+  return (
+    <ErrorBoundary>
+      <SubtitleOverlay />
+    </ErrorBoundary>
+  )
 }

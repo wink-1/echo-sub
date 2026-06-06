@@ -6,17 +6,19 @@ import { app } from 'electron'
 import { join, resolve } from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { BackendMessage } from '../shared/types'
+import { BACKEND_CONFIG } from '../shared/config'
 import { setWebSocketConnection } from './audio-capture'
 
 let pythonProcess: ChildProcess | null = null
+let downloadProcess: ChildProcess | null = null
 let wsClient: WebSocket | null = null
-const BACKEND_PORT = 8765
+const BACKEND_PORT = BACKEND_CONFIG.PORT
 const WS_URL = `ws://localhost:${BACKEND_PORT}/ws`
 
 // WebSocket 重连控制
 let wsReconnectCount = 0
-const WS_MAX_RECONNECT = 10
-const WS_RECONNECT_DELAY = 2000
+const WS_MAX_RECONNECT = BACKEND_CONFIG.WS_MAX_RECONNECT
+const WS_RECONNECT_DELAY = BACKEND_CONFIG.WS_RECONNECT_DELAY
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let messageCallback: ((msg: BackendMessage) => void) | null = null
@@ -42,45 +44,49 @@ export async function startPythonBackend(): Promise<void> {
   console.log(`Backend dir: ${backendDir}`)
   console.log(`Python path: ${pythonPath}`)
 
-  // Step 1: 预下载 ASR 模型（如果已缓存则秒过）
-  console.log('Downloading ASR model (if not cached)...')
-  await downloadModelIfNeeded(pythonPath, backendDir, envOverrides)
+  try {
+    // Step 1: 预下载 ASR 模型（如果已缓存则秒过）
+    console.log('Downloading ASR model (if not cached)...')
+    await downloadModelIfNeeded(pythonPath, backendDir, envOverrides)
 
-  // Step 2: 启动 Python 后端
-  console.log('Starting Python backend...')
+    // Step 2: 启动 Python 后端
+    console.log('Starting Python backend...')
 
-  pythonProcess = spawn(pythonPath, [join(backendDir, 'server.py')], {
-    cwd: backendDir,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      ...envOverrides,
-      PORT: String(BACKEND_PORT),
-      HF_ENDPOINT: 'https://hf-mirror.com',
-      PYTHONUNBUFFERED: '1',
-      http_proxy: '',
-      https_proxy: '',
-      HTTP_PROXY: '',
-      HTTPS_PROXY: '',
-      ALL_PROXY: ''
+    pythonProcess = spawn(pythonPath, [join(backendDir, 'server.py')], {
+      cwd: backendDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        ...envOverrides,
+        PORT: String(BACKEND_PORT),
+        PYTHONUNBUFFERED: '1',
+      }
+    })
+
+    pythonProcess.stdout?.on('data', (data: Buffer) => {
+      console.log(`[Python] ${data.toString().trim()}`)
+    })
+
+    pythonProcess.stderr?.on('data', (data: Buffer) => {
+      console.log(`[Python] ${data.toString().trim()}`)
+    })
+
+    pythonProcess.on('exit', (code) => {
+      console.log(`Python backend exited with code ${code}`)
+      pythonProcess = null
+    })
+
+    // 等待后端启动后连接 WebSocket
+    await connectWebSocket()
+  } catch (err) {
+    // 连接失败时清理已启动的 Python 进程
+    console.error('Failed to start Python backend:', err)
+    if (pythonProcess) {
+      pythonProcess.kill('SIGTERM')
+      pythonProcess = null
     }
-  })
-
-  pythonProcess.stdout?.on('data', (data: Buffer) => {
-    console.log(`[Python] ${data.toString().trim()}`)
-  })
-
-  pythonProcess.stderr?.on('data', (data: Buffer) => {
-    console.log(`[Python] ${data.toString().trim()}`)
-  })
-
-  pythonProcess.on('exit', (code) => {
-    console.log(`Python backend exited with code ${code}`)
-    pythonProcess = null
-  })
-
-  // 等待后端启动后连接 WebSocket
-  await connectWebSocket()
+    throw err
+  }
 }
 
 /**
@@ -88,49 +94,56 @@ export async function startPythonBackend(): Promise<void> {
  */
 async function connectWebSocket(): Promise<void> {
   // 模型已预下载到缓存，但加载仍可能需要一些时间
-  const maxRetries = 30
+  const maxRetries = BACKEND_CONFIG.WS_MAX_RETRIES
   const retryDelay = 1000
 
   for (let i = 0; i < maxRetries; i++) {
     try {
-      wsClient = new WebSocket(WS_URL)
+      // 使用局部变量 ws，避免循环中覆盖模块级 wsClient 导致的并发问题
+      const ws = new WebSocket(WS_URL)
 
       await new Promise<void>((resolve, reject) => {
-        wsClient!.on('open', () => {
+        ws.on('open', () => {
           console.log('Connected to Python backend via WebSocket')
-          setWebSocketConnection(wsClient!)
+          wsReconnectCount = 0
+          // 在 open 回调内注册 message/close 事件，确保仅对已打开的连接生效
+          ws.on('message', (data: Buffer) => {
+            try {
+              const msg: BackendMessage = JSON.parse(data.toString())
+              messageCallback?.(msg)
+            } catch (e) {
+              console.error('Failed to parse backend message:', e)
+            }
+          })
+
+          ws.on('close', () => {
+            console.log('WebSocket connection closed')
+            // 仅当 ws 仍是当前活跃连接时才清理
+            if (wsClient === ws) {
+              wsClient = null
+            }
+            // 自动重连（有限次数）
+            if (pythonProcess && wsReconnectCount < WS_MAX_RECONNECT) {
+              wsReconnectCount++
+              console.log(`[WS] Reconnecting (attempt ${wsReconnectCount}/${WS_MAX_RECONNECT})...`)
+              setTimeout(() => {
+                connectWebSocket().catch((err: unknown) => {
+                  console.error('[WS] Reconnect failed:', err)
+                })
+              }, WS_RECONNECT_DELAY)
+            } else if (wsReconnectCount >= WS_MAX_RECONNECT) {
+              console.error(`[WS] Max reconnect attempts (${WS_MAX_RECONNECT}) reached. Giving up.`)
+            }
+          })
+
+          wsClient = ws
+          setWebSocketConnection(ws)
           resolve()
         })
 
-        wsClient!.on('error', (err) => {
+        ws.on('error', (err) => {
           reject(err)
         })
-      })
-
-      wsClient.on('message', (data: Buffer) => {
-        try {
-          const msg: BackendMessage = JSON.parse(data.toString())
-          messageCallback?.(msg)
-        } catch (e) {
-          console.error('Failed to parse backend message:', e)
-        }
-      })
-
-      wsClient.on('close', () => {
-        console.log('WebSocket connection closed')
-        wsClient = null
-        // 自动重连（有限次数）
-        if (pythonProcess && wsReconnectCount < WS_MAX_RECONNECT) {
-          wsReconnectCount++
-          console.log(`[WS] Reconnecting (attempt ${wsReconnectCount}/${WS_MAX_RECONNECT})...`)
-          setTimeout(() => {
-            connectWebSocket().catch(err => {
-              console.error('[WS] Reconnect failed:', err)
-            })
-          }, WS_RECONNECT_DELAY)
-        } else if (wsReconnectCount >= WS_MAX_RECONNECT) {
-          console.error(`[WS] Max reconnect attempts (${WS_MAX_RECONNECT}) reached. Giving up.`)
-        }
       })
 
       return
@@ -154,6 +167,11 @@ export function stopPythonBackend(): void {
     wsClient = null
   }
 
+  if (downloadProcess) {
+    downloadProcess.kill('SIGTERM')
+    downloadProcess = null
+  }
+
   if (pythonProcess) {
     pythonProcess.kill('SIGTERM')
     pythonProcess = null
@@ -175,15 +193,11 @@ async function downloadModelIfNeeded(
       env: {
         ...process.env,
         ...envOverrides,
-        HF_ENDPOINT: 'https://hf-mirror.com',
         PYTHONUNBUFFERED: '1',
-        http_proxy: '',
-        https_proxy: '',
-        HTTP_PROXY: '',
-        HTTPS_PROXY: '',
-        ALL_PROXY: ''
       }
     })
+
+    downloadProcess = child
 
     child.stdout.on('data', (data: Buffer) => {
       console.log(`[Download] ${data.toString().trim()}`)
@@ -194,6 +208,7 @@ async function downloadModelIfNeeded(
     })
 
     child.on('exit', (code) => {
+      downloadProcess = null
       if (code === 0) {
         resolve()
       } else {
@@ -202,6 +217,7 @@ async function downloadModelIfNeeded(
     })
 
     child.on('error', (err) => {
+      downloadProcess = null
       reject(err)
     })
   })
@@ -235,19 +251,25 @@ function getBackendDir(): string {
  */
 function findPython(): string {
   const backendDir = getBackendDir()
+  const isWindows = process.platform === 'win32'
 
-  // 开发模式: 检查 venv
+  // 开发模式: 优先用项目 venv
   if (!app.isPackaged) {
-    const venvPython = join(backendDir, 'venv/bin/python3')
-    if (existsSync(venvPython)) {
-      console.log('Using venv Python:', venvPython)
-      return venvPython
+    const venvPaths = isWindows
+      ? [join(backendDir, 'venv/Scripts/python.exe'), join(backendDir, 'venv/Scripts/python3.exe')]
+      : [join(backendDir, 'venv/bin/python3'), join(backendDir, 'venv/bin/python')]
+    for (const venvPython of venvPaths) {
+      if (existsSync(venvPython)) {
+        console.log('Using venv Python:', venvPython)
+        return venvPython
+      }
     }
   }
 
-  // 系统 python3 (开发降级 或 打包模式)
-  console.log('Using system Python: python3')
-  return 'python3'
+  // 系统 Python
+  const systemPython = isWindows ? 'python' : 'python3'
+  console.log('Using system Python:', systemPython)
+  return systemPython
 }
 
 /**

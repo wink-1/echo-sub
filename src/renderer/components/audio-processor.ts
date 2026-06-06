@@ -6,11 +6,13 @@
  * AudioWorklet 在独立线程运行，不会有主线程阻塞问题。
  * 当前 ScriptProcessorNode 仍可正常工作，但未来版本的浏览器/Electron 可能移除支持。
  */
+import { AUDIO_CONFIG } from '../../shared/config'
+
 export class AudioPCMProcessor {
   private audioContext: AudioContext | null = null
   private sourceNode: MediaStreamAudioSourceNode | null = null
   private scriptNode: ScriptProcessorNode | null = null
-  private targetSampleRate = 16000
+  private targetSampleRate = AUDIO_CONFIG.TARGET_SAMPLE_RATE
 
   async start(stream: MediaStream): Promise<void> {
     this.audioContext = new AudioContext({ sampleRate: this.targetSampleRate })
@@ -18,7 +20,7 @@ export class AudioPCMProcessor {
       await this.audioContext.resume()
     }
     this.sourceNode = this.audioContext.createMediaStreamSource(stream)
-    this.scriptNode = this.audioContext.createScriptProcessor(4096, 1, 1)
+    this.scriptNode = this.audioContext.createScriptProcessor(AUDIO_CONFIG.BUFFER_SIZE, 1, 1)
     this.scriptNode.onaudioprocess = (event) => {
       const inputData = event.inputBuffer.getChannelData(0)
       const pcm16 = new Int16Array(inputData.length)
@@ -26,11 +28,14 @@ export class AudioPCMProcessor {
         const s = Math.max(-1, Math.min(1, inputData[i]))
         pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff
       }
-      const bytes = new Uint8Array(pcm16.buffer.slice(0))
-      window.electronAPI?.sendAudioPCMData(bytes)
+      window.electronAPI?.sendAudioPCMData(new Uint8Array(pcm16.buffer))
     }
     this.sourceNode.connect(this.scriptNode)
-    this.scriptNode.connect(this.audioContext.destination)
+    // 连接到静音 GainNode 避免音频回放/回声
+    const silenceGain = this.audioContext.createGain()
+    silenceGain.gain.value = 0
+    this.scriptNode.connect(silenceGain)
+    silenceGain.connect(this.audioContext.destination)
   }
 
   stop(): void {

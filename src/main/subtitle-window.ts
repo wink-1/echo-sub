@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, screen } from 'electron'
 import { join } from 'path'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { app } from 'electron'
+import { SUBTITLE_CONFIG } from '../shared/config'
 
 let subtitleWindow: BrowserWindow | null = null
 
@@ -37,7 +38,7 @@ function saveWindowState(): void {
     const [width, height] = subtitleWindow.getSize()
     const statePath = getStatePath()
     const dir = join(statePath, '..')
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    mkdirSync(dir, { recursive: true })
     writeFileSync(statePath, JSON.stringify({ x, y, width, height }))
   } catch (e) {
     console.warn('Failed to save window state:', e)
@@ -95,11 +96,12 @@ export function createSubtitleWindow(): BrowserWindow {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: true
     }
   })
 
-  subtitleWindow.setOpacity(0.92)
+  subtitleWindow.setOpacity(SUBTITLE_CONFIG.DEFAULT_OPACITY)
 
   // 允许在所有工作区和全屏上显示
   subtitleWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })

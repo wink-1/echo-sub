@@ -24,6 +24,7 @@ declare global {
       closeSubtitleWindow: () => Promise<{ success: boolean }>
       isSubtitleWindowOpen: () => Promise<boolean>
       subtitleDrag: (deltaX: number, deltaY: number) => Promise<void>
+      toggleAlwaysOnTop: () => Promise<{ alwaysOnTop: boolean }>
     }
   }
 }

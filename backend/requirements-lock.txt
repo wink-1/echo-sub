@@ -1,0 +1,8 @@
+ctranslate2==4.7.2
+fastapi==0.136.3
+faster-whisper==1.2.1
+httpx==0.28.1
+numpy==2.4.6
+onnxruntime==1.26.0
+uvicorn==0.49.0
+websockets==16.0

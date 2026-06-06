@@ -198,7 +198,7 @@ async def asr_worker(
             else:
                 # 完全不匹配（用户跳过了内容或修正了之前的识别）
                 # 发送完整的当前结果，并重置累积
-                print(f"[ASR Worker] Text mismatch, resetting accumulation. Old: '{accumulated_text[:50]}' New: '{full_text[:50]}'")
+                logger.warning(f"Text mismatch, resetting accumulation. Old: '{accumulated_text[:50]}' New: '{full_text[:50]}'")
                 accumulated_text = ""
                 new_text = full_text
 
@@ -210,7 +210,7 @@ async def asr_worker(
 
         seg_id = f"seg-{asr_segment_counter}"
         asr_segment_counter += 1
-        print(f"[ASR Worker] {new_text} (lang={info.language}, id={seg_id}, full={full_text[:60]}...)")
+        logger.info(f"{new_text} (lang={info.language}, id={seg_id})")
 
         await safe_send_json(websocket, {
             "type": "asr_final",
@@ -224,7 +224,7 @@ async def asr_worker(
                 "language": info.language
             })
         except asyncio.QueueFull:
-            print("[ASR Worker] Translation queue full")
+            logger.warning("Translation queue full")
 
 
 async def translation_worker(
@@ -248,7 +248,7 @@ async def translation_worker(
         sid = entry["segment_id"]
 
         try:
-            print(f"[Trans Worker] Translating: '{src}'")
+            logger.debug(f"Translating: '{src}'")
             accumulated = ""
             async for partial in translator.translate_stream(src, lang, "zh"):
                 accumulated = partial
@@ -261,7 +261,7 @@ async def translation_worker(
                 "type": "translation_final",
                 "data": {"id": sid, "text": accumulated, "originalText": src, "language": lang}
             })
-            print(f"[Trans Worker] -> '{accumulated[:40]}'")
+            logger.info(f"-> '{accumulated[:40]}'")
 
             segment_history.append({
                 "id": sid, "source": src, "translation": accumulated, "language": lang
@@ -273,9 +273,7 @@ async def translation_worker(
                 asyncio.create_task(run_correction(websocket, sid, src, accumulated))
 
         except Exception as e:
-            print(f"[Trans Worker] Error translating '{src[:50]}': {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error translating '{src[:50]}': {e}", exc_info=True)
 
 
 # ---- Helpers ----
@@ -287,7 +285,7 @@ async def safe_send_json(websocket: WebSocket, data: dict):
     try:
         await websocket.send_json(data)
     except Exception as e:
-        print(f"[WS] Failed to send: {e}")
+        logger.error(f"Failed to send: {e}")
         ws_active = False
 
 
@@ -304,7 +302,7 @@ async def handle_control_message(websocket: WebSocket, msg: dict):
         language = data.get("language", "auto")
         if asr_engine:
             asr_engine.forced_language = None if language == "auto" else language
-            print(f"[ASR] Language set: {language}")
+            logger.info(f"Language set: {language}")
         await send_status(websocket, "language_set", f"Language={language}")
 
 
@@ -328,7 +326,7 @@ async def run_correction(websocket, seg_id, source_text, translation):
                     seg["translation"] = result["corrected"]
                     break
     except Exception as e:
-        print(f"[Correction] Error: {e}")
+        logger.error(f"Correction error: {e}")
 
 
 async def send_status(websocket: WebSocket, status: str, message: str):
@@ -343,28 +341,28 @@ def init_engines():
     global asr_engine, translator, corrector
 
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-    print(f"HF_ENDPOINT: {os.environ.get('HF_ENDPOINT')}")
+    logger.info(f"HF_ENDPOINT: {os.environ.get('HF_ENDPOINT')}")
 
-    print(f"Initializing ASR engine (model={ASR_MODEL})...")
+    logger.info(f"Initializing ASR engine (model={ASR_MODEL})...")
     asr_engine = ASREngine(model_size=ASR_MODEL)
 
-    print("Initializing DeepSeek translator...")
+    logger.info("Initializing DeepSeek translator...")
     translator = Translator(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, model=DEEPSEEK_MODEL)
 
-    print("Initializing DeepSeek corrector...")
+    logger.info("Initializing DeepSeek corrector...")
     corrector = Corrector(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, model=DEEPSEEK_MODEL)
 
-    print("All engines initialized!")
-    print(f"  ASR: {ASR_MODEL} | chunk={ASR_CHUNK_SECONDS}s overlap={ASR_OVERLAP_SECONDS}s")
-    print(f"  Translation: DeepSeek ({DEEPSEEK_MODEL})")
+    logger.info("All engines initialized!")
+    logger.info(f"  ASR: {ASR_MODEL} | chunk={ASR_CHUNK_SECONDS}s overlap={ASR_OVERLAP_SECONDS}s")
+    logger.info(f"  Translation: DeepSeek ({DEEPSEEK_MODEL})")
     if DEEPSEEK_API_KEY:
-        print(f"  API Key: *** (已配置)")
+        logger.info("  API Key: *** (已配置)")
     else:
-        print("  ⚠️  API Key 未设置！请在 .env 文件中配置 DEEPSEEK_API_KEY")
+        logger.warning("  API Key 未设置！请在 .env 文件中配置 DEEPSEEK_API_KEY")
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8765))
     init_engines()
-    print(f"Starting EchoSub backend on port {port}")
+    logger.info(f"Starting EchoSub backend on port {port}")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")

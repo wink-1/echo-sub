@@ -60,9 +60,8 @@ const electronAPI = {
         thumbnailSize: { width: 0, height: 0 }
       })
       if (sources.length > 0) {
-        const screenSource = sources.find(s =>
-          s.name === 'Entire Screen' || s.name === 'Screen 1'
-        ) || sources[0]
+        // 优先匹配屏幕，用第一个 source 作为默认 fallback（不同语言的系统屏幕名称不同）
+        const screenSource = sources[0]
         console.log('[preload] Got screen source:', screenSource.id, screenSource.name)
         return screenSource.id
       }

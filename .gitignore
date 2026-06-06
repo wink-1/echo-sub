@@ -51,3 +51,4 @@ models/*.bin
 
 # Electron
 release/
+.DS_Store

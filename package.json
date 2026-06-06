@@ -16,6 +16,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:python": "cd backend && python -m pytest tests/ -v",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write 'src/**/*.{ts,tsx,js,jsx,json,css}'",
+    "format:check": "prettier --check 'src/**/*.{ts,tsx,js,jsx,json,css}'",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "postinstall": "electron-builder install-app-deps"
   },
   "build": {
@@ -78,23 +83,31 @@
     }
   },
   "dependencies": {
-    "electron-audio-loopback": "^1.0.0",
     "ws": "^8.18.0",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.3.0",
+    "@vitest/coverage-v8": "^4.1.8",
     "autoprefixer": "^10.4.20",
     "electron": "^31.7.0",
     "electron-builder": "^25.1.0",
     "electron-vite": "^2.3.0",
+    "eslint": "^10.4.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "jsdom": "^29.1.1",
     "postcss": "^8.4.49",
+    "prettier": "^3.8.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.60.1",
     "vitest": "^4.1.8"
   }
 }

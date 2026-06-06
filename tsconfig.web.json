@@ -9,7 +9,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "outDir": "./out/renderer",
-    "rootDir": "./src/renderer"
+    "rootDir": "./src"
   },
   "include": ["src/renderer/**/*", "src/shared/**/*"]
 }
