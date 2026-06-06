@@ -53,8 +53,12 @@ export function createSubtitleWindow(): BrowserWindow {
   const state = loadWindowState()
   const primaryDisplay = screen.getPrimaryDisplay()
   const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
-  const winWidth = state.width || 900
-  const winHeight = state.height || 340
+
+  // 钳制保存的尺寸，防止异常状态导致窗口过大
+  const MAX_WIN_WIDTH = Math.min(screenWidth - 80, 1200)
+  const MAX_WIN_HEIGHT = Math.min(Math.round(screenHeight * 0.6), 500)
+  const winWidth = Math.min(state.width || 900, MAX_WIN_WIDTH)
+  const winHeight = Math.min(state.height || 340, MAX_WIN_HEIGHT)
 
   // 优先使用保存的位置，确保窗口在屏幕范围内
   let winX: number, winY: number
