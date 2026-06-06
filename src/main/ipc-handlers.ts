@@ -4,7 +4,6 @@ import { ipcMain, BrowserWindow } from 'electron'
 import { AppSettings, IPC_CHANNELS, BackendMessage } from '../shared/types'
 import { startAudioCapture, stopAudioCapture } from './audio-capture'
 import { onBackendMessage, sendToBackend } from './python-bridge'
-import { updateSubtitleContent } from './subtitle-window'
 
 let currentSettings: AppSettings
 
@@ -16,7 +15,7 @@ export function registerIpcHandlers(
 
   // 设置后端消息回调
   onBackendMessage((msg: BackendMessage) => {
-    handleBackendMessage(msg, subtitleWindow)
+    handleBackendMessage(msg)
   })
 
   // 开始捕获
@@ -50,10 +49,9 @@ export function registerIpcHandlers(
 }
 
 /**
- * 广播消息到所有窗口 (主窗口 + 字幕窗口)
+ * 广播消息到所有窗口
  */
 function broadcastToWindows(msg: BackendMessage): void {
-  const { BrowserWindow } = require('electron')
   const windows = BrowserWindow.getAllWindows()
   for (const win of windows) {
     if (!win.isDestroyed()) {
@@ -65,28 +63,13 @@ function broadcastToWindows(msg: BackendMessage): void {
 /**
  * 处理来自 Python 后端的消息
  */
-function handleBackendMessage(msg: BackendMessage, subtitleWindow: BrowserWindow | null): void {
+function handleBackendMessage(msg: BackendMessage): void {
   switch (msg.type) {
     case 'asr_partial':
-      broadcastToWindows(msg)
-      break
-
     case 'asr_final':
-      broadcastToWindows(msg)
-      break
-
     case 'translation_partial':
-      updateSubtitleContent(msg.data.text, msg.data.originalText || '', 'partial')
-      broadcastToWindows(msg)
-      break
-
     case 'translation_final':
-      updateSubtitleContent(msg.data.text, msg.data.originalText || '', 'confirmed')
-      broadcastToWindows(msg)
-      break
-
     case 'correction':
-      updateSubtitleContent(msg.data.correctedText || msg.data.text, msg.data.originalText || '', 'corrected')
       broadcastToWindows(msg)
       break
 

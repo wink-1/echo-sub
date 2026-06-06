@@ -3,7 +3,8 @@
 import { spawn, ChildProcess } from 'child_process'
 import { WebSocket } from 'ws'
 import { app } from 'electron'
-import { join } from 'path'
+import { join, resolve } from 'path'
+import { existsSync, readFileSync } from 'fs'
 import { BackendMessage } from '../shared/types'
 import { setWebSocketConnection } from './audio-capture'
 
@@ -11,6 +12,11 @@ let pythonProcess: ChildProcess | null = null
 let wsClient: WebSocket | null = null
 const BACKEND_PORT = 8765
 const WS_URL = `ws://localhost:${BACKEND_PORT}/ws`
+
+// WebSocket 重连控制
+let wsReconnectCount = 0
+const WS_MAX_RECONNECT = 10
+const WS_RECONNECT_DELAY = 2000
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let messageCallback: ((msg: BackendMessage) => void) | null = null
@@ -111,17 +117,20 @@ async function connectWebSocket(): Promise<void> {
       })
 
       wsClient.on('close', () => {
-        console.log('WebSocket connection closed, attempting reconnect...')
+        console.log('WebSocket connection closed')
         wsClient = null
-        // 自动重连
-        setTimeout(() => {
-          if (pythonProcess && !wsClient) {
-            console.log('[WS] Reconnecting to Python backend...')
+        // 自动重连（有限次数）
+        if (pythonProcess && wsReconnectCount < WS_MAX_RECONNECT) {
+          wsReconnectCount++
+          console.log(`[WS] Reconnecting (attempt ${wsReconnectCount}/${WS_MAX_RECONNECT})...`)
+          setTimeout(() => {
             connectWebSocket().catch(err => {
               console.error('[WS] Reconnect failed:', err)
             })
-          }
-        }, 2000)
+          }, WS_RECONNECT_DELAY)
+        } else if (wsReconnectCount >= WS_MAX_RECONNECT) {
+          console.error(`[WS] Max reconnect attempts (${WS_MAX_RECONNECT}) reached. Giving up.`)
+        }
       })
 
       return
@@ -230,13 +239,10 @@ function findPython(): string {
   // 开发模式: 检查 venv
   if (!app.isPackaged) {
     const venvPython = join(backendDir, 'venv/bin/python3')
-    try {
-      const fs = require('fs')
-      if (fs.existsSync(venvPython)) {
-        console.log('Using venv Python:', venvPython)
-        return venvPython
-      }
-    } catch { /* ignore */ }
+    if (existsSync(venvPython)) {
+      console.log('Using venv Python:', venvPython)
+      return venvPython
+    }
   }
 
   // 系统 python3 (开发降级 或 打包模式)
@@ -250,20 +256,18 @@ function findPython(): string {
  */
 function loadEnvFile(backendDir: string): Record<string, string> {
   const envVars: Record<string, string> = {}
-  const fs = require('fs')
-  const path = require('path')
 
   // 查找 .env 文件：先找项目根目录，再找 backend 目录
-  const rootDir = path.resolve(backendDir, '..')
+  const rootDir = resolve(backendDir, '..')
   const envPaths = [
-    path.join(rootDir, '.env'),
-    path.join(backendDir, '.env'),
+    join(rootDir, '.env'),
+    join(backendDir, '.env'),
   ]
 
   for (const envPath of envPaths) {
-    if (fs.existsSync(envPath)) {
+    if (existsSync(envPath)) {
       console.log(`[env] Loading: ${envPath}`)
-      const content = fs.readFileSync(envPath, 'utf-8')
+      const content = readFileSync(envPath, 'utf-8')
       for (const line of content.split('\n')) {
         const trimmed = line.trim()
         // 跳过注释和空行

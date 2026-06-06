@@ -62,16 +62,6 @@ export function createSubtitleWindow(): BrowserWindow {
   return subtitleWindow
 }
 
-export function updateSubtitleContent(text: string, sourceText: string, status: string): void {
-  if (subtitleWindow && !subtitleWindow.isDestroyed()) {
-    subtitleWindow.webContents.send('subtitle-update', {
-      text,
-      sourceText,
-      status
-    })
-  }
-}
-
 export function getSubtitleWindow(): BrowserWindow | null {
   return subtitleWindow
 }

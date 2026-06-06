@@ -1,43 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useTranslationStore } from '../stores/translationStore'
-
-// PCM 音频处理器
-class AudioPCMProcessor {
-  private audioContext: AudioContext | null = null
-  private sourceNode: MediaStreamAudioSourceNode | null = null
-  private scriptNode: ScriptProcessorNode | null = null
-  private targetSampleRate = 16000
-
-  async start(stream: MediaStream): Promise<void> {
-    this.audioContext = new AudioContext({ sampleRate: this.targetSampleRate })
-    if (this.audioContext.state === 'suspended') {
-      await this.audioContext.resume()
-    }
-    this.sourceNode = this.audioContext.createMediaStreamSource(stream)
-    this.scriptNode = this.audioContext.createScriptProcessor(4096, 1, 1)
-    this.scriptNode.onaudioprocess = (event) => {
-      const inputData = event.inputBuffer.getChannelData(0)
-      const pcm16 = new Int16Array(inputData.length)
-      for (let i = 0; i < inputData.length; i++) {
-        const s = Math.max(-1, Math.min(1, inputData[i]))
-        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff
-      }
-      const bytes = new Uint8Array(pcm16.buffer.slice(0))
-      window.electronAPI?.sendAudioPCMData(bytes)
-    }
-    this.sourceNode.connect(this.scriptNode)
-    this.scriptNode.connect(this.audioContext.destination)
-  }
-
-  stop(): void {
-    this.scriptNode?.disconnect()
-    this.sourceNode?.disconnect()
-    this.audioContext?.close()
-    this.audioContext = null
-    this.sourceNode = null
-    this.scriptNode = null
-  }
-}
+import { AudioPCMProcessor } from './audio-processor'
 
 export default function SubtitleOverlay(): JSX.Element {
   const { segments, clearSegments } = useTranslationStore()
@@ -59,7 +22,7 @@ export default function SubtitleOverlay(): JSX.Element {
   const animFrameRef = useRef<number>(0)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  // 自动滚动到底部 - 使用 scrollIntoView 确保可靠滚动
+  // 自动滚动到底部
   useEffect(() => {
     const timer = setTimeout(() => {
       bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
@@ -161,22 +124,27 @@ export default function SubtitleOverlay(): JSX.Element {
     }
   }
 
-  // 拖拽
+  // 拖拽 — 使用 document 级全局监听器，防止快速拖拽时移出标题栏导致中断
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     isDragging.current = true
     lastPos.current = { x: e.screenX, y: e.screenY }
-  }, [])
 
-  const handleDragMove = useCallback((e: React.MouseEvent) => {
-    if (!isDragging.current) return
-    const deltaX = e.screenX - lastPos.current.x
-    const deltaY = e.screenY - lastPos.current.y
-    lastPos.current = { x: e.screenX, y: e.screenY }
-    window.electronAPI?.subtitleDrag?.(deltaX, deltaY)
-  }, [])
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!isDragging.current) return
+      const deltaX = ev.screenX - lastPos.current.x
+      const deltaY = ev.screenY - lastPos.current.y
+      lastPos.current = { x: ev.screenX, y: ev.screenY }
+      window.electronAPI?.subtitleDrag?.(deltaX, deltaY)
+    }
 
-  const handleDragEnd = useCallback(() => {
-    isDragging.current = false
+    const onMouseUp = () => {
+      isDragging.current = false
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
   }, [])
 
   const visibleSegments = segments.slice(-8)
@@ -196,9 +164,6 @@ export default function SubtitleOverlay(): JSX.Element {
       {/* 标题栏 - 可拖拽 */}
       <div
         onMouseDown={handleDragStart}
-        onMouseMove={handleDragMove}
-        onMouseUp={handleDragEnd}
-        onMouseLeave={handleDragEnd}
         className="flex items-center justify-between px-4 py-2.5 cursor-grab active:cursor-grabbing"
         style={{
           position: 'sticky',
@@ -231,7 +196,7 @@ export default function SubtitleOverlay(): JSX.Element {
         </div>
       </div>
 
-      {/* 控制栏 - 开始按钮 + 语言选择 */}
+      {/* 控制栏 */}
       <div
         className="flex items-center gap-2 px-4 py-2"
         style={{
@@ -240,7 +205,6 @@ export default function SubtitleOverlay(): JSX.Element {
           background: 'rgba(0,0,0,0.2)'
         }}
       >
-        {/* 开始/停止按钮 */}
         <button
           onClick={handleToggle}
           className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 flex items-center gap-1.5 ${
@@ -263,7 +227,6 @@ export default function SubtitleOverlay(): JSX.Element {
           )}
         </button>
 
-        {/* 源语言选择 */}
         <select
           value={sourceLanguage}
           onChange={(e) => handleLanguageChange(e.target.value)}
@@ -282,7 +245,6 @@ export default function SubtitleOverlay(): JSX.Element {
           <option value="ru" style={{ background: '#1a1a1a' }}>Русский</option>
         </select>
 
-        {/* 音频电平条 */}
         {isCapturing && (
           <div className="flex-1 flex items-center gap-1.5">
             <div className="flex-1 bg-white/10 rounded-full h-1.5 overflow-hidden">
@@ -302,7 +264,6 @@ export default function SubtitleOverlay(): JSX.Element {
           </div>
         )}
 
-        {/* 清空按钮 */}
         {!isCapturing && segments.length > 0 && (
           <button
             onClick={clearSegments}
@@ -370,7 +331,6 @@ export default function SubtitleOverlay(): JSX.Element {
           </div>
         ))}
 
-        {/* 滚动锚点 - 确保自动滚动到底部 */}
         <div ref={bottomRef} style={{ height: 1 }} />
 
         {segments.length === 0 && (
