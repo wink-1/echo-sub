@@ -57,15 +57,14 @@ export default function SubtitleOverlay(): JSX.Element {
   const streamRef = useRef<MediaStream | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animFrameRef = useRef<number>(0)
+  const bottomRef = useRef<HTMLDivElement>(null)
 
-  // 自动滚动到底部
+  // 自动滚动到底部 - 使用 scrollIntoView 确保可靠滚动
   useEffect(() => {
-    const el = scrollRef.current
-    if (!el) return
-    const rafId = requestAnimationFrame(() => {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
-    })
-    return () => cancelAnimationFrame(rafId)
+    const timer = setTimeout(() => {
+      bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+    }, 50)
+    return () => clearTimeout(timer)
   }, [segments])
 
   // 音频电平监测
@@ -370,6 +369,9 @@ export default function SubtitleOverlay(): JSX.Element {
             </div>
           </div>
         ))}
+
+        {/* 滚动锚点 - 确保自动滚动到底部 */}
+        <div ref={bottomRef} style={{ height: 1 }} />
 
         {segments.length === 0 && (
           <div className="flex flex-col items-center justify-center py-6 opacity-30">
