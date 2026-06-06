@@ -3,10 +3,13 @@
 兼容 OpenAI API 格式
 """
 
+import logging
 import os
 import json
 import httpx
 from typing import AsyncGenerator
+
+logger = logging.getLogger(__name__)
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"
@@ -70,7 +73,7 @@ class Translator:
         self.client = httpx.AsyncClient(timeout=TIMEOUT_SECONDS)
         self.context_history: list[str] = []
         self.MAX_CONTEXT = 3
-        print(f"[Translator] DeepSeek API: {self.model} (key configured)")
+        logger.info(f"DeepSeek API: {self.model} (key configured)")
 
     async def translate(
         self,
@@ -100,12 +103,10 @@ class Translator:
             result = await self._call_deepseek(prompt)
             result = result.strip()
             self._add_context(text, result)
-            print(f"[Translator] '{text[:40]}' -> '{result[:40]}'")
+            logger.info(f"'{text[:40]}' -> '{result[:40]}'")
             return result
         except Exception as e:
-            print(f"[Translator] Error: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Translation error: {e}", exc_info=True)
             return text
 
     async def translate_stream(
@@ -168,7 +169,7 @@ class Translator:
                             pass
 
             self._add_context(text, accumulated)
-            print(f"[Translator Stream] '{text[:40]}' -> '{accumulated[:40]}'")
+            logger.info(f"'{text[:40]}' -> '{accumulated[:40]}'")
 
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
@@ -177,16 +178,14 @@ class Translator:
                 err_body = e.response.text[:200]
             except Exception:
                 pass
-            print(f"[Translator Stream] HTTP {status} error: {err_body}")
+            logger.error(f"HTTP {status} error: {err_body}")
             if status == 401:
-                print("[Translator Stream] ⚠️ API Key 无效或已过期，请检查 .env 中的 DEEPSEEK_API_KEY")
+                logger.error("API Key 无效或已过期，请检查 .env 中的 DEEPSEEK_API_KEY")
             elif status == 429:
-                print("[Translator Stream] ⚠️ API 请求频率过高，请稍后重试")
+                logger.warning("API 请求频率过高，请稍后重试")
             yield accumulated or text
         except Exception as e:
-            print(f"[Translator Stream] Error: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Stream error: {type(e).__name__}: {e}", exc_info=True)
             yield accumulated or text
 
     async def _call_deepseek(self, prompt: str) -> str:

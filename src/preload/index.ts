@@ -46,6 +46,9 @@ const electronAPI = {
   subtitleDrag: (deltaX: number, deltaY: number) =>
     ipcRenderer.invoke('subtitle-drag', deltaX, deltaY),
 
+  toggleAlwaysOnTop: (): Promise<{ alwaysOnTop: boolean }> =>
+    ipcRenderer.invoke('toggle-always-on-top'),
+
   reportAudioSource: (source: string) => {
     ipcRenderer.send('audio-source-changed', source)
   },

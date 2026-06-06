@@ -15,6 +15,7 @@ export default function SubtitleOverlay(): JSX.Element {
   const [sourceLanguage, setSourceLanguage] = useState('auto')
   const [errorMsg, setErrorMsg] = useState('')
   const [audioLevel, setAudioLevel] = useState(0)
+  const [alwaysOnTop, setAlwaysOnTop] = useState(true)
 
   const processorRef = useRef<AudioPCMProcessor | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -124,6 +125,13 @@ export default function SubtitleOverlay(): JSX.Element {
     }
   }
 
+  const handleToggleAlwaysOnTop = async () => {
+    const result = await window.electronAPI?.toggleAlwaysOnTop()
+    if (result) {
+      setAlwaysOnTop(result.alwaysOnTop)
+    }
+  }
+
   // 拖拽 — 使用 document 级全局监听器，防止快速拖拽时移出标题栏导致中断
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     isDragging.current = true
@@ -190,6 +198,13 @@ export default function SubtitleOverlay(): JSX.Element {
           )}
         </div>
         <div className="flex items-center gap-1 opacity-30 hover:opacity-60 transition-opacity">
+          <button
+            onClick={handleToggleAlwaysOnTop}
+            className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${alwaysOnTop ? 'text-blue-400' : 'text-white/40'}`}
+            title={alwaysOnTop ? '取消置顶' : '始终置顶'}
+          >
+            {alwaysOnTop ? '📌' : '📍'}
+          </button>
           <div className="w-4 h-1 rounded-full bg-white/50" />
           <div className="w-4 h-1 rounded-full bg-white/50" />
           <div className="w-4 h-1 rounded-full bg-white/50" />

@@ -63,12 +63,12 @@ async def websocket_endpoint(websocket: WebSocket):
     translation_task = None
 
     try:
-        asr_task = asyncio.create_task(
-            asr_worker(audio_queue, translation_queue, websocket, stop_event)
-        )
-        translation_task = asyncio.create_task(
-            translation_worker(translation_queue, websocket, stop_event)
-        )
+    asr_task = asyncio.create_task(
+        asr_worker(audio_queue, translation_queue, websocket, stop_event)
+    )
+    translation_task = asyncio.create_task(
+        translation_worker(translation_queue, websocket, stop_event)
+    )
 
         packet_count = 0
         last_log_time = 0
@@ -87,7 +87,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 try:
                     msg = json.loads(message["text"])
                     if isinstance(msg, dict) and "type" in msg:
-                        print(f"[WS] Control: {msg['type']}")
+                        logger.debug(f"Control: {msg['type']}")
                         await handle_control_message(websocket, msg)
                 except (json.JSONDecodeError, KeyError):
                     pass
@@ -100,7 +100,7 @@ async def websocket_endpoint(websocket: WebSocket):
             packet_count += 1
             now = asyncio.get_event_loop().time()
             if now - last_log_time > 5:
-                print(f"[WS] Queued {packet_count} audio packets")
+                logger.debug(f"Queued {packet_count} audio packets")
                 last_log_time = now
 
             if asr_engine is None:
@@ -175,7 +175,7 @@ async def asr_worker(
                 None, asr_engine.transcribe_chunk_direct, process_data
             )
         except Exception as e:
-            print(f"[ASR Worker] Error: {e}")
+            logger.error(f"ASR Worker error: {e}")
             continue
 
         if not segments:
