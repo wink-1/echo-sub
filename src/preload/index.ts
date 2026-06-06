@@ -53,6 +53,11 @@ const electronAPI = {
     ipcRenderer.send('audio-source-changed', source)
   },
 
+  getPlatform: (): string => process.platform,
+
+  checkScreenRecordPermission: (): Promise<{ granted: boolean; status: string; platform: string }> =>
+    ipcRenderer.invoke('check-screen-record-permission'),
+
   getSystemAudioSource: async (): Promise<string | null> => {
     try {
       const sources = await desktopCapturer.getSources({
@@ -60,17 +65,23 @@ const electronAPI = {
         thumbnailSize: { width: 0, height: 0 }
       })
       if (sources.length > 0) {
-        // 优先匹配屏幕，用第一个 source 作为默认 fallback（不同语言的系统屏幕名称不同）
         const screenSource = sources[0]
-        console.log('[preload] Got screen source:', screenSource.id, screenSource.name)
+        console.log(
+          '[preload] Got screen source:',
+          screenSource.id,
+          screenSource.name,
+          'display_id:',
+          (screenSource as any).display_id
+        )
         return screenSource.id
       }
+      console.warn('[preload] No screen sources found from desktopCapturer')
       return null
     } catch (err) {
       console.error('[preload] Failed to get system audio source:', err)
       return null
     }
-  }
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)

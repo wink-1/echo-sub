@@ -19,6 +19,8 @@ declare global {
       reportAudioSource: (source: string) => void
 
       getSystemAudioSource: () => Promise<string | null>
+      getPlatform: () => string
+      checkScreenRecordPermission: () => Promise<{ granted: boolean; status: string; platform: string }>
 
       openSubtitleWindow: () => Promise<{ success: boolean }>
       closeSubtitleWindow: () => Promise<{ success: boolean }>

@@ -77,29 +77,77 @@ export default function SubtitleOverlay(): JSX.Element {
   const startSystemAudio = async () => {
     setStatus('connecting')
     setErrorMsg('')
+
+    // macOS: 提前检查屏幕录制权限
+    const perm = await window.electronAPI?.checkScreenRecordPermission?.()
+    if (perm && !perm.granted && perm.platform === 'darwin') {
+      console.warn(
+        '💡 macOS 屏幕录制权限未授予，系统音频捕获将不可用。请在 系统设置 → 隐私与安全性 → 屏幕录制 中允许 EchoSub。将切换到麦克风模式。'
+      )
+    }
+
     let source: 'system' | 'microphone' = 'microphone'
 
     try {
       try {
         const sourceId = await window.electronAPI?.getSystemAudioSource()
-        if (!sourceId) throw new Error('无可用音频源')
+        if (!sourceId) throw new Error('无可用音频源（系统未检测到屏幕）')
 
+        console.log('[SubtitleOverlay] Got source ID:', sourceId)
+
+        // 使用 Electron 31+ 兼容的约束格式（去掉 deprecated mandatory 包装）
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
-            mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId }
-          } as unknown as MediaTrackConstraints,
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+          } as MediaTrackConstraints,
           video: {
-            mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId, maxWidth: 1, maxHeight: 1 }
-          } as unknown as MediaTrackConstraints
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+            minWidth: 1,
+            maxWidth: 1,
+            minHeight: 1,
+            maxHeight: 1,
+          } as MediaTrackConstraints,
         })
-        stream.getVideoTracks().forEach(t => t.stop())
-        if (stream.getAudioTracks().length === 0) throw new Error('无音频轨道')
+
+        const audioTracks = stream.getAudioTracks()
+        const videoTracks = stream.getVideoTracks()
+        videoTracks.forEach((t) => t.stop())
+
+        console.log(
+          `[SubtitleOverlay] Audio tracks: ${audioTracks.length}, Video tracks: ${videoTracks.length}`
+        )
+        if (audioTracks.length === 0) {
+          // macOS 系统音频需要虚拟音频设备（如 BlackHole）
+          const platform = window.electronAPI?.getPlatform?.() || ''
+          const hint =
+            platform === 'darwin'
+              ? 'macOS 系统音频捕获需要安装虚拟音频驱动（如 BlackHole 或 Loopback），否则将自动切换到麦克风模式'
+              : '未检测到系统音频轨道'
+          throw new Error(hint)
+        }
+
         source = 'system'
         streamRef.current = stream
       } catch (err) {
         console.warn('System audio failed, falling back to mic:', err)
+        // 如果是 macOS 且提示需要 BlackHole，告知用户
+        const platform = window.electronAPI?.getPlatform?.() || ''
+        if (platform === 'darwin' && err instanceof Error && err.message.includes('BlackHole')) {
+          console.warn(
+            '💡 macOS 提示: 请安装 BlackHole (brew install blackhole-2ch)，然后在系统设置中将 BlackHole 设为多输出设备'
+          )
+        }
+
         const micStream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          audio: {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
         })
         streamRef.current = micStream
       }

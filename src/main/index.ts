@@ -1,4 +1,4 @@
-import { app, ipcMain, Tray, Menu, nativeImage } from 'electron'
+import { app, ipcMain, Tray, Menu, nativeImage, systemPreferences } from 'electron'
 import { join } from 'path'
 import { startPythonBackend, stopPythonBackend } from './python-bridge'
 import { createSubtitleWindow, closeSubtitleWindow, getSubtitleWindow } from './subtitle-window'
@@ -144,6 +144,17 @@ app.whenReady().then(async () => {
       return { alwaysOnTop: !current }
     }
     return { alwaysOnTop: false }
+  })
+
+  // macOS: 检查屏幕录制权限状态
+  ipcMain.handle('check-screen-record-permission', () => {
+    if (process.platform !== 'darwin') return { granted: true, platform: process.platform }
+    try {
+      const status = systemPreferences.getMediaAccessStatus('screen')
+      return { granted: status === 'granted', status, platform: process.platform }
+    } catch {
+      return { granted: false, status: 'unknown', platform: process.platform }
+    }
   })
 })
 
