@@ -5,10 +5,19 @@ EchoSub Python 后端 - FastAPI WebSocket 服务器
 
 import asyncio
 import json
+import logging
 import os
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uvicorn
+
+# 结构化日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
+logger = logging.getLogger("EchoSub")
 
 from asr import ASREngine
 from translator import Translator
@@ -68,7 +77,7 @@ async def websocket_endpoint(websocket: WebSocket):
             message = await websocket.receive()
 
             if message["type"] == "websocket.disconnect":
-                print("[WS] Client disconnected")
+                logger.info("Client disconnected")
                 break
 
             if message["type"] != "websocket.receive":
@@ -114,11 +123,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     pass
 
     except WebSocketDisconnect:
-        print("[WS] Client disconnected (WebSocketDisconnect)")
+        logger.info("Client disconnected (WebSocketDisconnect)")
     except Exception as e:
-        print(f"[WS] WebSocket error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
         stop_event.set()
         ws_active = False
@@ -129,7 +136,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     await asyncio.wait_for(t, timeout=3.0)
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
-        print("[WS] Connection closed, workers stopped")
+        logger.info("Connection closed, workers stopped")
 
 
 # ---- Workers ----
