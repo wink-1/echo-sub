@@ -60,6 +60,7 @@ export async function startPythonBackend(): Promise<void> {
         ...envOverrides,
         PORT: String(BACKEND_PORT),
         PYTHONUNBUFFERED: '1',
+        PYTHONIOENCODING: 'utf-8',
       }
     })
 
@@ -194,6 +195,7 @@ async function downloadModelIfNeeded(
         ...process.env,
         ...envOverrides,
         PYTHONUNBUFFERED: '1',
+        PYTHONIOENCODING: 'utf-8',
       }
     })
 

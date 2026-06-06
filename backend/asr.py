@@ -11,8 +11,8 @@ from faster_whisper import WhisperModel
 
 logger = logging.getLogger(__name__)
 
-# 国内用户使用 HuggingFace 镜像
-HF_MIRROR = "https://hf-mirror.com"
+# HuggingFace 下载源，可通过环境变量 HF_ENDPOINT 配置（留空则使用官方源）
+HF_MIRROR = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
 
 # ASR 转录参数（统一配置，避免硬编码重复）
 TRANSCRIBE_PARAMS = dict(
@@ -50,11 +50,29 @@ def _detect_device() -> str:
 
 
 def _model_is_cached(model_size: str) -> bool:
-    """检查模型是否已缓存到本地。"""
-    cache_dir = os.path.expanduser(
+    """检查模型是否已完整缓存到本地。"""
+    model_dir = os.path.expanduser(
         f"~/.cache/huggingface/hub/models--Systran--faster-whisper-{model_size}"
     )
-    return os.path.isdir(cache_dir)
+    if not os.path.isdir(model_dir):
+        return False
+
+    # 必须有 refs/main（确认是从 main 分支下载的）
+    if not os.path.isfile(os.path.join(model_dir, "refs", "main")):
+        return False
+
+    # 必须有 snapshots 目录且非空（模型文件实际存在）
+    snapshots_dir = os.path.join(model_dir, "snapshots")
+    if not os.path.isdir(snapshots_dir):
+        return False
+
+    # 至少有一个快照子目录且包含模型文件
+    for entry in os.listdir(snapshots_dir):
+        snapshot_path = os.path.join(snapshots_dir, entry)
+        if os.path.isdir(snapshot_path) and len(os.listdir(snapshot_path)) > 0:
+            return True
+
+    return False
 
 
 class ASREngine:
