@@ -20,7 +20,7 @@ export const BACKEND_CONFIG = {
 /** 字幕显示配置 */
 export const SUBTITLE_CONFIG = {
   /** 可见段落最大数 */
-  MAX_VISIBLE_SEGMENTS: 8,
+  MAX_VISIBLE_SEGMENTS: 3,
   /** 存储段落最大数 */
   MAX_STORED_SEGMENTS: 50,
   /** 窗口默认透明度 */

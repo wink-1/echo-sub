@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { MouseEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { SUBTITLE_CONFIG } from '../../shared/config'
-import { useTranslationStore } from '../stores/translationStore'
+import { useTranslationStore, ASR_LIVE_ID } from '../stores/translationStore'
 import { AudioPCMProcessor } from './audio-processor'
 
 const LANGUAGE_OPTIONS = [
@@ -32,10 +31,14 @@ function getAudioCaptureError(platform: string, audioTracks: number): string {
 
 export default function SubtitleOverlay(): JSX.Element {
   const { segments, clearSegments, isAsrOnly } = useTranslationStore()
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const isDragging = useRef(false)
-  const lastPos = useRef({ x: 0, y: 0 })
+
+  // 每当段落变化就自动滚到底部（partial / confirmed 都跟）
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+    }, 50)
+    return () => clearTimeout(timer)
+  }, [segments])
 
   const [isCapturing, setIsCapturing] = useState(false)
   const [status, setStatus] = useState<'idle' | 'connecting' | 'running' | 'error'>('idle')
@@ -51,15 +54,30 @@ export default function SubtitleOverlay(): JSX.Element {
   const levelSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const animFrameRef = useRef<number>(0)
 
-  useEffect(() => {
-    const lastSeg = segments[segments.length - 1]
-    if (!lastSeg || lastSeg.status !== 'confirmed') return
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const lastResizeHeight = useRef(0)
 
+  // 根据内容高度动态调整窗口大小，消除空白区域
+  useEffect(() => {
     const timer = setTimeout(() => {
-      bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
-    }, 50)
+      if (!scrollRef.current) return
+
+      // 标题栏 (h-9=36) + 控制栏 (~40) + 错误提示 (~30 if present)
+      const FIXED_BARS_HEIGHT = 76 + (errorMsg ? 30 : 0)
+      // 滚动区内容实际高度（含 padding）
+      const contentHeight = scrollRef.current.scrollHeight
+      const desiredHeight = FIXED_BARS_HEIGHT + contentHeight + 8
+      const clamped = Math.max(160, Math.min(desiredHeight, 280))
+
+      // 仅在高度变化 >4px 时发送，避免抖动
+      if (Math.abs(clamped - lastResizeHeight.current) > 4) {
+        lastResizeHeight.current = clamped
+        window.electronAPI?.resizeSubtitleWindow?.(clamped)
+      }
+    }, 80)
     return () => clearTimeout(timer)
-  }, [segments])
+  }, [segments, errorMsg])
 
   const startLevelMonitor = (stream: MediaStream) => {
     const ctx = new AudioContext({ sampleRate: 16000 })
@@ -210,28 +228,6 @@ export default function SubtitleOverlay(): JSX.Element {
     }
   }
 
-  const handleDragStart = useCallback((e: MouseEvent) => {
-    isDragging.current = true
-    lastPos.current = { x: e.screenX, y: e.screenY }
-
-    const onMouseMove = (ev: globalThis.MouseEvent) => {
-      if (!isDragging.current) return
-      const deltaX = ev.screenX - lastPos.current.x
-      const deltaY = ev.screenY - lastPos.current.y
-      lastPos.current = { x: ev.screenX, y: ev.screenY }
-      window.electronAPI?.subtitleDrag?.(deltaX, deltaY)
-    }
-
-    const onMouseUp = () => {
-      isDragging.current = false
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-    }
-
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-  }, [])
-
   const visibleSegments = segments.slice(-SUBTITLE_CONFIG.MAX_VISIBLE_SEGMENTS)
   const statusText =
     status === 'running' ? '系统音频' : status === 'connecting' ? '连接中' : status === 'error' ? '异常' : '待机'
@@ -239,8 +235,7 @@ export default function SubtitleOverlay(): JSX.Element {
   return (
     <div className="flex h-full w-full select-none flex-col overflow-hidden rounded-lg border border-white/20 bg-neutral-950 text-white shadow-[0_8px_36px_rgba(0,0,0,0.6)]">
       <div
-        onMouseDown={handleDragStart}
-        className="flex h-9 shrink-0 cursor-grab items-center justify-between border-b border-white/20 px-3 active:cursor-grabbing"
+        className="flex h-9 shrink-0 items-center justify-between border-b border-white/20 px-3 [-webkit-app-region:drag]"
         role="toolbar"
         aria-label="字幕窗口工具栏"
       >
@@ -269,7 +264,7 @@ export default function SubtitleOverlay(): JSX.Element {
 
         <button
           onClick={handleToggleAlwaysOnTop}
-          className={`h-6 rounded-md border px-2 text-[10px] transition ${
+          className={`[-webkit-app-region:no-drag] h-6 rounded-md border px-2 text-[10px] transition ${
             alwaysOnTop
               ? 'border-sky-300/30 bg-sky-300/10 text-sky-100'
               : 'border-white/10 bg-white/5 text-white/45 hover:text-white/70'
@@ -303,7 +298,7 @@ export default function SubtitleOverlay(): JSX.Element {
           value={sourceLanguage}
           onChange={(e) => handleLanguageChange(e.target.value)}
           disabled={isCapturing}
-          className="h-7 rounded-md border border-white/20 bg-neutral-900 px-2 text-xs text-white/80 outline-none transition hover:border-white/30 disabled:opacity-40"
+          className="h-7 max-w-[120px] rounded-md border border-white/20 bg-neutral-900 px-2 text-xs text-white/80 outline-none transition hover:border-white/30 disabled:opacity-40"
           aria-label="源语言"
         >
           {LANGUAGE_OPTIONS.map((lang) => (
@@ -340,7 +335,7 @@ export default function SubtitleOverlay(): JSX.Element {
       </div>
 
       {errorMsg && (
-        <div className="shrink-0 border-b border-red-300/20 bg-red-400/10 px-3 py-1 text-[11px] leading-5 text-red-100/90">
+        <div className="max-h-[60px] shrink-0 overflow-y-auto border-b border-red-300/20 bg-red-400/10 px-3 py-1 text-[11px] leading-5 text-red-100/90">
           {errorMsg}
         </div>
       )}
@@ -353,7 +348,7 @@ export default function SubtitleOverlay(): JSX.Element {
         aria-label="翻译字幕"
       >
         {visibleSegments.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-xs text-white/50">
+          <div className="flex h-[80px] items-center justify-center text-xs text-white/50">
             点击“{isAsrOnly ? '开始识别' : '开始翻译'}”启动
           </div>
         ) : (
@@ -364,21 +359,28 @@ export default function SubtitleOverlay(): JSX.Element {
                 className="animate-fadeIn border-b border-white/10 px-1 pb-2 last:border-b-0"
               >
                 {seg.sourceText && seg.translatedText && seg.sourceText !== seg.translatedText && (
-                  <div className="mb-0.5 text-[11px] leading-relaxed text-white/60">{seg.sourceText}</div>
+                  <div className="mb-0.5 break-words text-[11px] leading-relaxed text-white/60">{seg.sourceText}</div>
                 )}
                 <div className="flex items-start gap-2">
                   <span
                     className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${
-                      seg.status === 'partial'
-                        ? 'animate-pulse bg-amber-300'
-                        : seg.status === 'corrected'
-                          ? 'bg-sky-300'
-                          : 'bg-emerald-300/80'
+                      seg.id === ASR_LIVE_ID
+                        ? 'animate-pulse bg-sky-300'
+                        : seg.status === 'partial'
+                          ? 'animate-pulse bg-amber-300'
+                          : seg.status === 'corrected'
+                            ? 'bg-sky-300'
+                            : 'bg-emerald-300/80'
                     }`}
                   />
-                  <div className="min-w-0 flex-1 text-[15px] font-medium leading-snug text-white/95 [text-shadow:0_1px_3px_rgba(0,0,0,0.65)]">
-                    {seg.translatedText || seg.sourceText}
-                    {seg.status === 'partial' && (
+                  <div className="min-w-0 flex-1 break-words text-[15px] font-medium leading-snug text-white/95 [text-shadow:0_1px_3px_rgba(0,0,0,0.65)]">
+                    {seg.id === ASR_LIVE_ID
+                      ? <span className="text-white/50">{seg.sourceText}<span className="ml-1 inline-block h-3 w-0.5 animate-pulse rounded-sm bg-sky-300/60" /></span>
+                      : seg.translatedText
+                        ? seg.translatedText
+                        : <span className="text-white/50">{seg.sourceText}<span className="ml-1.5 text-[11px] text-amber-200/60">翻译中…</span></span>
+                    }
+                    {seg.id !== ASR_LIVE_ID && seg.status === 'partial' && seg.translatedText && (
                       <span className="ml-1 inline-block h-4 w-0.5 translate-y-0.5 animate-pulse rounded-sm bg-amber-300/80" />
                     )}
                   </div>

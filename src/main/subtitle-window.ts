@@ -56,9 +56,9 @@ export function createSubtitleWindow(): BrowserWindow {
 
   // 钳制保存的尺寸，防止异常状态导致窗口过大
   const MAX_WIN_WIDTH = Math.min(screenWidth - 80, 1200)
-  const MAX_WIN_HEIGHT = Math.min(Math.round(screenHeight * 0.6), 500)
+  const MAX_WIN_HEIGHT = Math.min(Math.round(screenHeight * 0.35), 280)
   const winWidth = Math.min(state.width || 900, MAX_WIN_WIDTH)
-  const winHeight = Math.min(state.height || 340, MAX_WIN_HEIGHT)
+  const winHeight = Math.min(state.height || 160, MAX_WIN_HEIGHT)
 
   // 优先使用保存的位置，确保窗口在屏幕范围内
   let winX: number, winY: number
@@ -86,7 +86,7 @@ export function createSubtitleWindow(): BrowserWindow {
     width: winWidth,
     height: winHeight,
     minWidth: 600,
-    minHeight: 220,
+    minHeight: 160,
     x: winX,
     y: winY,
     alwaysOnTop: true,
@@ -95,7 +95,7 @@ export function createSubtitleWindow(): BrowserWindow {
     skipTaskbar: false,
     resizable: false,
     hasShadow: true,
-    backgroundColor: '#0a0a0a',
+    backgroundColor: '#09090b',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -129,22 +129,17 @@ export function createSubtitleWindow(): BrowserWindow {
     saveWindowState()
   })
 
-  // 禁止通过 OS 改变窗口尺寸（fr a meless + Windows 可能仍触发 enlarge）
+  // 禁止通过 OS 改变窗口尺寸（frameless + Windows 可能仍触发 enlarge）
   subtitleWindow.on('will-resize', (event) => {
     event.preventDefault()
   })
 
-  // 拖拽 IPC — 用 setBounds 锁死尺寸，防止 Windows 在拖动中误触 resize
-  ipcMain.removeHandler('subtitle-drag')
-  ipcMain.handle('subtitle-drag', (_event, deltaX: number, deltaY: number) => {
+  // 渲染器请求动态调整窗口高度（消除内容区空白）
+  ipcMain.on('resize-subtitle-window', (_event, desiredHeight: number) => {
     if (subtitleWindow && !subtitleWindow.isDestroyed()) {
-      const bounds = subtitleWindow.getBounds()
-      subtitleWindow.setBounds({
-        x: bounds.x + deltaX,
-        y: bounds.y + deltaY,
-        width: bounds.width,
-        height: bounds.height
-      })
+      const [width] = subtitleWindow.getSize()
+      const clamped = Math.max(160, Math.min(desiredHeight, 280))
+      subtitleWindow.setSize(width, clamped)
     }
   })
 

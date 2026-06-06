@@ -70,5 +70,6 @@ export const IPC_CHANNELS = {
   TRANSLATION_UPDATE: 'translation-update',
   TRANSLATION_CORRECTION: 'translation-correction',
   BACKEND_STATUS: 'backend-status',
-  GET_SETTINGS: 'get-settings'
+  GET_SETTINGS: 'get-settings',
+  RESIZE_SUBTITLE_WINDOW: 'resize-subtitle-window'
 } as const

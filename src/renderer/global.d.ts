@@ -18,15 +18,14 @@ declare global {
       sendAudioPCMData: (data: Uint8Array) => void
       reportAudioSource: (source: string) => void
 
-      getSystemAudioSource: () => Promise<string | null>
       getPlatform: () => string
       checkScreenRecordPermission: () => Promise<{ granted: boolean; status: string; platform: string }>
 
       openSubtitleWindow: () => Promise<{ success: boolean }>
       closeSubtitleWindow: () => Promise<{ success: boolean }>
       isSubtitleWindowOpen: () => Promise<boolean>
-      subtitleDrag: (deltaX: number, deltaY: number) => Promise<void>
       toggleAlwaysOnTop: () => Promise<{ alwaysOnTop: boolean }>
+      resizeSubtitleWindow: (height: number) => void
     }
   }
 }

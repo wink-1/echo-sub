@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, desktopCapturer } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
 
 const electronAPI = {
@@ -43,11 +43,12 @@ const electronAPI = {
   closeSubtitleWindow: () => ipcRenderer.invoke('close-subtitle-window'),
   isSubtitleWindowOpen: () => ipcRenderer.invoke('is-subtitle-window-open'),
 
-  subtitleDrag: (deltaX: number, deltaY: number) =>
-    ipcRenderer.invoke('subtitle-drag', deltaX, deltaY),
-
   toggleAlwaysOnTop: (): Promise<{ alwaysOnTop: boolean }> =>
     ipcRenderer.invoke('toggle-always-on-top'),
+
+  resizeSubtitleWindow: (height: number) => {
+    ipcRenderer.send(IPC_CHANNELS.RESIZE_SUBTITLE_WINDOW, height)
+  },
 
   reportAudioSource: (source: string) => {
     ipcRenderer.send('audio-source-changed', source)
@@ -57,31 +58,6 @@ const electronAPI = {
 
   checkScreenRecordPermission: (): Promise<{ granted: boolean; status: string; platform: string }> =>
     ipcRenderer.invoke('check-screen-record-permission'),
-
-  getSystemAudioSource: async (): Promise<string | null> => {
-    try {
-      const sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: { width: 0, height: 0 }
-      })
-      if (sources.length > 0) {
-        const screenSource = sources[0]
-        console.log(
-          '[preload] Got screen source:',
-          screenSource.id,
-          screenSource.name,
-          'display_id:',
-          (screenSource as any).display_id
-        )
-        return screenSource.id
-      }
-      console.warn('[preload] No screen sources found from desktopCapturer')
-      return null
-    } catch (err) {
-      console.error('[preload] Failed to get system audio source:', err)
-      return null
-    }
-  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)

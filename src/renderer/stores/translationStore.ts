@@ -2,6 +2,9 @@ import { create } from 'zustand'
 import { TranslationSegment } from '../../shared/types'
 import { SUBTITLE_CONFIG } from '../../shared/config'
 
+/** ASR 实时识别占位段 ID，asr_final 到达后会被替换 */
+export const ASR_LIVE_ID = '__asr_live__'
+
 interface TranslationState {
   segments: TranslationSegment[]
   isCapturing: boolean
@@ -9,6 +12,7 @@ interface TranslationState {
   addSegment: (segment: TranslationSegment) => void
   updateSegment: (id: string, updates: Partial<TranslationSegment>) => void
   correctSegment: (id: string, correctedText: string) => void
+  removeSegment: (id: string) => void
   clearSegments: () => void
   setCapturing: (capturing: boolean) => void
   setAsrOnly: (asrOnly: boolean) => void
@@ -55,6 +59,11 @@ export const useTranslationStore = create<TranslationState>((set) => ({
           ? { ...s, translatedText: correctedText, status: 'corrected' as const }
           : s
       )
+    })),
+
+  removeSegment: (id) =>
+    set((state) => ({
+      segments: state.segments.filter((s) => s.id !== id)
     })),
 
   clearSegments: () => set({ segments: [] }),
