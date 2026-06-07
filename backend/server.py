@@ -15,10 +15,18 @@ EchoSub Python 后端 - FastAPI WebSocket 服务器
 """
 
 # ═══════════════════════════════════════════════════════════════
-# 强制 stdout/stderr 使用 UTF-8（必须在任何 import 之前）
-# 解决 Windows 上 PYTHONIOENCODING 对 logging.StreamHandler 无效的问题
+# Windows 控制台 UTF-8 — 必须在任何 import 前执行
 # ═══════════════════════════════════════════════════════════════
 import sys as _sys
+if _sys.platform == 'win32':
+    import ctypes as _ctypes
+    try:
+        _ctypes.windll.kernel32.SetConsoleCP(65001)
+        _ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+    except Exception:
+        pass  # 非控制台环境（如管道输出）忽略
+
+# 冗余兜底：同时包装 stdout/stderr 为 UTF-8
 import io as _io
 if hasattr(_sys.stdout, 'buffer'):
     _sys.stdout = _io.TextIOWrapper(_sys.stdout.buffer, encoding='utf-8',
