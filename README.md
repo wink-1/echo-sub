@@ -2,6 +2,10 @@
 
 实时捕获电脑正在播放的外语音频，翻译成中文字幕悬浮显示，并具备自动纠错能力。
 
+## 🎬 演示视频
+
+[📦 百度网盘下载](https://pan.baidu.com/s/1kpl1-Sftyz_n-Y1xEkfIOA?pwd=jhas) | 提取码: `jhas`
+
 ## ✨ 特性
 
 - 🎙️ **系统音频捕获** - 直接捕获电脑播放的音频（macOS 使用 ScreenCaptureKit / Windows 使用 desktopCapturer）
