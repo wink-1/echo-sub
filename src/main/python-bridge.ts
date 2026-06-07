@@ -65,11 +65,11 @@ export async function startPythonBackend(): Promise<void> {
     })
 
     pythonProcess.stdout?.on('data', (data: Buffer) => {
-      console.log(`[Python] ${data.toString().trim()}`)
+      console.log(`[Python] ${data.toString('utf-8').trim()}`)
     })
 
     pythonProcess.stderr?.on('data', (data: Buffer) => {
-      console.log(`[Python] ${data.toString().trim()}`)
+      console.log(`[Python] ${data.toString('utf-8').trim()}`)
     })
 
     pythonProcess.on('exit', (code) => {
@@ -202,11 +202,11 @@ async function downloadModelIfNeeded(
     downloadProcess = child
 
     child.stdout.on('data', (data: Buffer) => {
-      console.log(`[Download] ${data.toString().trim()}`)
+      console.log(`[Download] ${data.toString('utf-8').trim()}`)
     })
 
     child.stderr.on('data', (data: Buffer) => {
-      console.log(`[Download] ${data.toString().trim()}`)
+      console.log(`[Download] ${data.toString('utf-8').trim()}`)
     })
 
     child.on('exit', (code) => {
