@@ -86,6 +86,11 @@ MIN_FINAL_WORDS = 2             # finalize 最少单词数（"live." 1词不够,
 MIN_FINAL_CHARS = 10            # finalize 最少字符数
 MIN_SPEECH_FOR_PAUSE = 0.8      # 停顿触发处理的最少语音时长（秒）
 
+# 跨 final 聚合参数
+MIN_FLUSH_WORDS = 12      # 以标点结尾时，最少词数才立即 flush（避免短碎片单独翻译）
+MAX_FLUSH_WORDS = 30      # 累积文本最大词数，超过强制 flush
+FLUSH_TIMEOUT = 2.0       # 距离上次文本到达的最大等待时间（秒），超时强制 flush
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -214,6 +219,11 @@ async def asr_worker(
     last_partial_full_char_count = 0
     last_partial_has_punctuation = False
 
+    # 句子累积器：将同一句话的所有 partial + final 文本累积，final 时翻译完整句子
+    sentence_accumulator = ""
+    # 最后一次有文本到达的时间（用于超时 flush）
+    last_text_arrival_time = 0.0
+
     while not stop_event.is_set():
         try:
             chunk = await asyncio.wait_for(audio_queue.get(), timeout=0.1)
@@ -246,24 +256,58 @@ async def asr_worker(
 
             if should_promote:
                 logger.info(f"[pause-promote] '{last_partial_text[:30]}' → final (pause={time_since_audio:.2f}s)")
-                await safe_send_json(websocket, {
-                    "type": "asr_final",
-                    "data": {
-                        "id": last_partial_id,
-                        "text": last_partial_text,
-                        "fullText": last_partial_full_text,
-                        "language": last_partial_language
-                    }
-                })
-                if not ASR_ONLY:
-                    try:
-                        translation_queue.put_nowait({
-                            "segment_id": last_partial_id,
-                            "source_text": last_partial_text,
+
+                # 将停顿提升的文本追加到累积器
+                if sentence_accumulator:
+                    sentence_accumulator += " " + last_partial_text
+                else:
+                    sentence_accumulator = last_partial_text
+                last_text_arrival_time = time.monotonic()
+
+                # 检查是否应该 flush
+                should_flush = False
+                acc_words = len(sentence_accumulator.split())
+                if sentence_accumulator.strip() and sentence_accumulator.strip()[-1] in SENTENCE_END_CHARS and acc_words >= MIN_FLUSH_WORDS:
+                    should_flush = True
+                if acc_words >= MAX_FLUSH_WORDS:
+                    should_flush = True
+
+                seg_id = f"seg-{asr_segment_counter}"
+                asr_segment_counter += 1
+
+                if should_flush:
+                    await safe_send_json(websocket, {
+                        "type": "asr_final",
+                        "data": {
+                            "id": seg_id,
+                            "text": sentence_accumulator,
+                            "fullText": sentence_accumulator,
                             "language": last_partial_language
-                        })
-                    except asyncio.QueueFull:
-                        logger.warning("Translation queue full")
+                        }
+                    })
+                    if not ASR_ONLY:
+                        try:
+                            translation_queue.put_nowait({
+                                "segment_id": seg_id,
+                                "source_text": sentence_accumulator,
+                                "language": last_partial_language
+                            })
+                        except asyncio.QueueFull:
+                            logger.warning("Translation queue full")
+                    sentence_accumulator = ""
+                    last_text_arrival_time = 0.0
+                else:
+                    await safe_send_json(websocket, {
+                        "type": "asr_partial",
+                        "data": {
+                            "id": seg_id,
+                            "text": last_partial_text,
+                            "fullText": sentence_accumulator,
+                            "language": last_partial_language
+                        }
+                    })
+
+                # 清除 partial 追踪
                 last_partial_text = ""
                 last_partial_id = ""
                 last_partial_language = ""
@@ -273,6 +317,32 @@ async def asr_worker(
                 last_partial_has_punctuation = False
                 last_audio_time = time.monotonic()
                 continue
+
+        # ---- 句子累积器超时 flush ----
+        if sentence_accumulator and last_text_arrival_time > 0 and (time.monotonic() - last_text_arrival_time) > FLUSH_TIMEOUT:
+            seg_id = f"seg-{asr_segment_counter}"
+            asr_segment_counter += 1
+            logger.info(f"[timeout-flush] '{sentence_accumulator[:50]}' (id={seg_id}, words={len(sentence_accumulator.split())})")
+            await safe_send_json(websocket, {
+                "type": "asr_final",
+                "data": {
+                    "id": seg_id,
+                    "text": sentence_accumulator,
+                    "fullText": sentence_accumulator,
+                    "language": last_partial_language or "en"
+                }
+            })
+            if not ASR_ONLY:
+                try:
+                    translation_queue.put_nowait({
+                        "segment_id": seg_id,
+                        "source_text": sentence_accumulator,
+                        "language": last_partial_language or "en"
+                    })
+                except asyncio.QueueFull:
+                    logger.warning("Translation queue full")
+            sentence_accumulator = ""
+            last_text_arrival_time = 0.0
 
         # ---- 决定是否处理缓冲区 ----
         should_process = False
@@ -318,6 +388,13 @@ async def asr_worker(
         if not new_text:
             continue
 
+        # ---- 句子累积：将增量文本追加到句子累积器 ----
+        if sentence_accumulator:
+            sentence_accumulator += " " + new_text
+        else:
+            sentence_accumulator = new_text
+        last_text_arrival_time = time.monotonic()
+
         # ---- 判断 is_final（标点优先 + 停顿辅助）----
         # 核心思路: whisper 输出的标点本身就是最可靠的句子边界信号
         # 当 fullText 以句号/问号结尾且整体够长 → 即使没有停顿也 finalize
@@ -353,29 +430,64 @@ async def asr_worker(
         seg_id = f"seg-{asr_segment_counter}"
         asr_segment_counter += 1
 
-        msg_type = "asr_final" if is_final else "asr_partial"
-        logger.info(f"[{msg_type}] {new_text} (lang={info.language}, id={seg_id}, "
-                     f"pause={time_since_audio:.2f}s, inc_words={word_count}, full_words={full_word_count}, "
-                     f"punct={text_ends_sentence})")
-
-        # 发送消息 — 同时附带 fullText (完整 whisper 输出) 供前端实时显示
-        await safe_send_json(websocket, {
-            "type": msg_type,
-            "data": {"id": seg_id, "text": new_text, "fullText": full_text, "language": info.language}
-        })
-
         if is_final:
-            # final → 送翻译队列，清除 partial 追踪
-            last_audio_time = time.monotonic()  # 重置避免连续触发
-            if not ASR_ONLY:
-                try:
-                    translation_queue.put_nowait({
-                        "segment_id": seg_id,
-                        "source_text": new_text,
+            # ---- final：检查是否应该 flush ----
+            should_flush = False
+            acc_words = len(sentence_accumulator.split())
+
+            # 条件1：以句末标点结尾且长度足够 → 句子完整，flush
+            if sentence_accumulator.strip() and sentence_accumulator.strip()[-1] in SENTENCE_END_CHARS and acc_words >= MIN_FLUSH_WORDS:
+                should_flush = True
+
+            # 条件2：超过最大词数 → 强制 flush
+            if acc_words >= MAX_FLUSH_WORDS:
+                should_flush = True
+
+            if should_flush:
+                msg_type = "asr_final"
+                logger.info(f"[{msg_type}] {sentence_accumulator} (lang={info.language}, id={seg_id}, "
+                             f"pause={time_since_audio:.2f}s, acc_words={acc_words})")
+
+                await safe_send_json(websocket, {
+                    "type": "asr_final",
+                    "data": {
+                        "id": seg_id,
+                        "text": sentence_accumulator,
+                        "fullText": sentence_accumulator,
                         "language": info.language
-                    })
-                except asyncio.QueueFull:
-                    logger.warning("Translation queue full")
+                    }
+                })
+
+                if not ASR_ONLY:
+                    try:
+                        translation_queue.put_nowait({
+                            "segment_id": seg_id,
+                            "source_text": sentence_accumulator,
+                            "language": info.language
+                        })
+                    except asyncio.QueueFull:
+                        logger.warning("Translation queue full")
+
+                # 清空句子累积器
+                sentence_accumulator = ""
+                last_text_arrival_time = 0.0
+            else:
+                # 不 flush，发送 partial 显示进度
+                msg_type = "asr_partial"
+                logger.info(f"[{msg_type}] {new_text} (lang={info.language}, id={seg_id}, "
+                             f"pause={time_since_audio:.2f}s, acc_words={acc_words}, not-flushing)")
+
+                await safe_send_json(websocket, {
+                    "type": "asr_partial",
+                    "data": {
+                        "id": seg_id,
+                        "text": new_text,
+                        "fullText": sentence_accumulator,
+                        "language": info.language
+                    }
+                })
+
+            # 清除 partial 追踪（停顿提升用）
             last_partial_text = ""
             last_partial_id = ""
             last_partial_language = ""
@@ -384,6 +496,23 @@ async def asr_worker(
             last_partial_full_char_count = 0
             last_partial_has_punctuation = False
         else:
+            # ---- partial：显示实时进度，累积器继续增长 ----
+            last_text_arrival_time = time.monotonic()
+            msg_type = "asr_partial"
+            logger.info(f"[{msg_type}] {new_text} (lang={info.language}, id={seg_id}, "
+                         f"pause={time_since_audio:.2f}s, inc_words={word_count}, full_words={full_word_count}, "
+                         f"punct={text_ends_sentence}, acc_len={len(sentence_accumulator)})")
+
+            await safe_send_json(websocket, {
+                "type": "asr_partial",
+                "data": {
+                    "id": seg_id,
+                    "text": new_text,
+                    "fullText": sentence_accumulator,
+                    "language": info.language
+                }
+            })
+
             # partial → 追踪以便停顿提升
             last_partial_text = new_text
             last_partial_id = seg_id
@@ -392,6 +521,32 @@ async def asr_worker(
             last_partial_full_word_count = full_word_count
             last_partial_full_char_count = full_char_count
             last_partial_has_punctuation = text_ends_sentence
+
+    # 退出时：如果有残留累积文本，作为 final flush 出去
+    if sentence_accumulator:
+        seg_id = f"seg-{asr_segment_counter}"
+        asr_segment_counter += 1
+        logger.info(f"[exit-flush] '{sentence_accumulator[:50]}' (id={seg_id})")
+        await safe_send_json(websocket, {
+            "type": "asr_final",
+            "data": {
+                "id": seg_id,
+                "text": sentence_accumulator,
+                "fullText": sentence_accumulator,
+                "language": last_partial_language or "en"
+            }
+        })
+        if not ASR_ONLY:
+            try:
+                translation_queue.put_nowait({
+                    "segment_id": seg_id,
+                    "source_text": sentence_accumulator,
+                    "language": last_partial_language or "en"
+                })
+            except asyncio.QueueFull:
+                pass
+        sentence_accumulator = ""
+        last_text_arrival_time = 0.0
 
 
 def _extract_increment(full_text: str, accumulated: str) -> str:
