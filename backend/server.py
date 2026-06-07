@@ -2,15 +2,16 @@
 EchoSub Python 后端 - FastAPI WebSocket 服务器
 队列管线: audio_queue → asr_worker → translation_queue → translation_worker
 
-停顿检测策略（双重阈值）:
-- 主阈值 1.5s: 过滤掉说话人在重点单词上的强调停顿（通常 <1s），
-  只在真正意义上的句子结束停顿才触发 asr_final
-- 标点阈值 1.0s: 如果 whisper 输出末尾是句号/问号等，允许稍短停顿判定为句子结束
-- 绝对超时 3.0s: 停顿非常长时无论如何都要 finalize，避免句子永远不被翻译
-- 最短长度检查: 太短的碎片（<3词或<15字符）即使有停顿也不单独翻译
+句子边界检测策略（标点优先 + 停顿辅助）:
+- 标点优先: 当 whisper 输出以句号/问号等结尾 且 整体文本足够长(≥2词/≥10字符)时,
+  即使没有停顿也判定为 asr_final — 这样连续说话也能正确翻译
+- 停顿辅助: 停顿 >1.0s + 增量足够长 → asr_final (处理无标点的句子结束)
+- 绝对超时 3.0s: 停顿非常长时无论如何都要 finalize
+- 最短长度: 短碎片(<2词/<10字符)如 "live." 即使有标点也不单独翻译,
+  会继续积累直到形成足够长的完整句子
 
 停顿提升: 如果停顿出现但缓冲区太小无法处理, 将最后一个 asr_partial 提升为 asr_final
-以确保该语句被翻译 — 避免语句只显示但不翻译的问题。
+以满足相同条件 (标点+长度 或 长停顿+长度)。
 """
 
 import asyncio
@@ -54,16 +55,15 @@ ASR_ONLY = os.environ.get("ASR_ONLY", "").lower() in ("1", "true", "yes")
 
 ws_active = False
 
-# ASR worker 参数 — 停顿检测使用双重阈值避免强调停顿拆分句子
+# ASR worker 参数 — 标点优先 + 停顿辅助的句子边界检测
 ASR_CHUNK_SECONDS = 2.0     # 每次 ASR 的最小音频长度
 ASR_OVERLAP_SECONDS = 0.5   # 滑动窗口重叠
-PAUSE_THRESHOLD_SECONDS = 1.5   # 主停顿阈值：>1.5s 无新音频视为句子结束（过滤强调停顿）
-SENTENCE_END_PAUSE = 1.0        # 标点停顿阈值：>1.0s + 末尾有标点 → 句子结束
+PAUSE_THRESHOLD_SECONDS = 1.0   # 停顿辅助阈值：>1.0s 停顿 + 足够增量 → finalize
 ABSOLUTE_TIMEOUT = 3.0          # 绝对超时：>3s 停顿无论如何都 finalize
 SENTENCE_END_CHARS = '.!?。！？' # 句子结束标点
-MIN_FINAL_WORDS = 3             # finalize 最少单词数（避免 "live." 碎片被单独翻译）
-MIN_FINAL_CHARS = 15            # finalize 最少字符数
-MIN_SPEECH_FOR_PAUSE = 1.0      # 停顿触发处理的最少语音时长（秒）
+MIN_FINAL_WORDS = 2             # finalize 最少单词数（"live." 1词不够, "Hello world." 2词足够）
+MIN_FINAL_CHARS = 10            # finalize 最少字符数
+MIN_SPEECH_FOR_PAUSE = 0.8      # 停顿触发处理的最少语音时长（秒）
 
 
 @app.websocket("/ws")
@@ -189,8 +189,8 @@ async def asr_worker(
     last_partial_id = ""
     last_partial_language = ""
     last_partial_full_text = ""
-    last_partial_word_count = 0
-    last_partial_char_count = 0
+    last_partial_full_word_count = 0
+    last_partial_full_char_count = 0
     last_partial_has_punctuation = False
 
     while not stop_event.is_set():
@@ -206,22 +206,21 @@ async def asr_worker(
 
         # ---- 停顿提升 ----
         # 当停顿出现但缓冲区太小无法处理时，将最后一个 partial 提升为 final
-        # 但仍需满足最短长度条件（避免碎片如 "live." 被单独翻译）
-        if time_since_audio > SENTENCE_END_PAUSE and buffer_len < min_speech_for_pause and last_partial_text:
-            # 判断是否满足 finalize 条件
+        # 条件与正常 is_final 相同：标点+足够长度 或 长停顿+足够长度 或 绝对超时
+        if time_since_audio > PAUSE_THRESHOLD_SECONDS and buffer_len < min_speech_for_pause and last_partial_text:
             should_promote = False
-            if time_since_audio > ABSOLUTE_TIMEOUT:
-                # 绝对超时 → 无论如何 finalize
+            # 标点优先: fullText 以标点结尾 + 整体长度足够 → promote
+            if last_partial_has_punctuation and (
+                last_partial_full_word_count >= MIN_FINAL_WORDS or last_partial_full_char_count >= MIN_FINAL_CHARS
+            ):
                 should_promote = True
+            # 长停顿 + 增量长度足够 → promote
             elif time_since_audio > PAUSE_THRESHOLD_SECONDS and (
-                last_partial_word_count >= MIN_FINAL_WORDS or last_partial_char_count >= MIN_FINAL_CHARS
+                len(last_partial_text.split()) >= MIN_FINAL_WORDS or len(last_partial_text.strip()) >= MIN_FINAL_CHARS
             ):
-                # 长停顿 + 足够文本 → finalize
                 should_promote = True
-            elif time_since_audio > SENTENCE_END_PAUSE and last_partial_has_punctuation and (
-                last_partial_word_count >= MIN_FINAL_WORDS or last_partial_char_count >= MIN_FINAL_CHARS
-            ):
-                # 短停顿 + 句末标点 + 足够文本 → finalize
+            # 绝对超时 → 无论如何 promote
+            elif time_since_audio > ABSOLUTE_TIMEOUT:
                 should_promote = True
 
             if should_promote:
@@ -244,25 +243,22 @@ async def asr_worker(
                         })
                     except asyncio.QueueFull:
                         logger.warning("Translation queue full")
-                # 清除追踪并重置时间（避免重复触发）
                 last_partial_text = ""
                 last_partial_id = ""
                 last_partial_language = ""
                 last_partial_full_text = ""
-                last_partial_word_count = 0
-                last_partial_char_count = 0
+                last_partial_full_word_count = 0
+                last_partial_full_char_count = 0
                 last_partial_has_punctuation = False
                 last_audio_time = time.monotonic()
                 continue
 
         # ---- 决定是否处理缓冲区 ----
-        # 只要缓冲区达到最小长度就处理（用于 asr_partial 实时显示）
-        # 或停顿检测触发且有足够语音（用于可能的 asr_final）
         should_process = False
 
         if buffer_len >= min_samples:
             should_process = True
-        elif time_since_audio > SENTENCE_END_PAUSE and buffer_len >= min_speech_for_pause:
+        elif time_since_audio > PAUSE_THRESHOLD_SECONDS and buffer_len >= min_speech_for_pause:
             should_process = True
 
         if not should_process:
@@ -301,34 +297,44 @@ async def asr_worker(
         if not new_text:
             continue
 
-        # ---- 判断 is_final（双重阈值 + 最短长度检查）----
-        # 不再仅靠停顿时长判断 — 避免强调停顿拆分句子
+        # ---- 判断 is_final（标点优先 + 停顿辅助）----
+        # 核心思路: whisper 输出的标点本身就是最可靠的句子边界信号
+        # 当 fullText 以句号/问号结尾且整体够长 → 即使没有停顿也 finalize
+        # 这样连续说话时也能正确翻译，短碎片如 "live." 因长度不够不会被 finalize
         new_words = new_text.split()
         word_count = len(new_words)
         char_count = len(new_text.strip())
-        # 检查 whisper 完整输出是否以句子结束标点结尾
+
+        # full_text 的整体长度（包含之前已识别的文本，代表整个 utterance 的规模）
+        full_word_count = len(full_text.split())
+        full_char_count = len(full_text.strip())
+
+        # 检查 whisper 输出是否以句子结束标点结尾
         text_ends_sentence = full_text.strip() and full_text.strip()[-1] in SENTENCE_END_CHARS
-        has_min_length = word_count >= MIN_FINAL_WORDS or char_count >= MIN_FINAL_CHARS
+
+        # 增量是否足够长（用于停顿辅助的长度判断）
+        increment_has_min_length = word_count >= MIN_FINAL_WORDS or char_count >= MIN_FINAL_CHARS
+        # 整体 utterance 是否足够长（用于标点优先的长度判断）
+        full_has_min_length = full_word_count >= MIN_FINAL_WORDS or full_char_count >= MIN_FINAL_CHARS
 
         is_final = False
-        if time_since_audio > ABSOLUTE_TIMEOUT:
-            # 绝对超时 → 无论如何 finalize（说话人确实停了很久）
+        # 1. 标点优先: fullText 以标点结尾 + 整体够长 → finalize
+        #    即使 pause=0s（连续说话中）也能触发 — 这是最重要的判断条件
+        if text_ends_sentence and full_has_min_length:
             is_final = True
-        elif time_since_audio > PAUSE_THRESHOLD_SECONDS and has_min_length:
-            # 长停顿 (>1.5s) + 足够文本长度 → finalize
+        # 2. 停顿辅助: 停顿 >1.0s + 增量够长 → finalize（处理无标点的句子）
+        elif time_since_audio > PAUSE_THRESHOLD_SECONDS and increment_has_min_length:
             is_final = True
-        elif time_since_audio > SENTENCE_END_PAUSE and text_ends_sentence and has_min_length:
-            # 短停顿 (>1.0s) + 句末标点 + 足够文本 → finalize
-            # （说话人在句号后停顿，即使停顿不长也说明句子结束了）
+        # 3. 绝对超时: 停顿 >3s → 无论如何 finalize
+        elif time_since_audio > ABSOLUTE_TIMEOUT:
             is_final = True
-        # 否则: 说话中或强调停顿 → 只发 asr_partial（实时显示，不翻译）
 
         seg_id = f"seg-{asr_segment_counter}"
         asr_segment_counter += 1
 
         msg_type = "asr_final" if is_final else "asr_partial"
         logger.info(f"[{msg_type}] {new_text} (lang={info.language}, id={seg_id}, "
-                     f"pause={time_since_audio:.2f}s, words={word_count}, chars={char_count}, "
+                     f"pause={time_since_audio:.2f}s, inc_words={word_count}, full_words={full_word_count}, "
                      f"punct={text_ends_sentence})")
 
         # 发送消息 — 同时附带 fullText (完整 whisper 输出) 供前端实时显示
@@ -353,8 +359,8 @@ async def asr_worker(
             last_partial_id = ""
             last_partial_language = ""
             last_partial_full_text = ""
-            last_partial_word_count = 0
-            last_partial_char_count = 0
+            last_partial_full_word_count = 0
+            last_partial_full_char_count = 0
             last_partial_has_punctuation = False
         else:
             # partial → 追踪以便停顿提升
@@ -362,8 +368,8 @@ async def asr_worker(
             last_partial_id = seg_id
             last_partial_language = info.language
             last_partial_full_text = full_text
-            last_partial_word_count = word_count
-            last_partial_char_count = char_count
+            last_partial_full_word_count = full_word_count
+            last_partial_full_char_count = full_char_count
             last_partial_has_punctuation = text_ends_sentence
 
 
@@ -530,7 +536,7 @@ def init_engines():
 
     logger.info("All engines initialized!")
     logger.info(f"  ASR: {ASR_MODEL} | chunk={ASR_CHUNK_SECONDS}s overlap={ASR_OVERLAP_SECONDS}s")
-    logger.info(f"  Pause detection: main={PAUSE_THRESHOLD_SECONDS}s punct={SENTENCE_END_PAUSE}s abs={ABSOLUTE_TIMEOUT}s min_words={MIN_FINAL_WORDS}")
+    logger.info(f"  Sentence detection: punct-first | pause={PAUSE_THRESHOLD_SECONDS}s abs={ABSOLUTE_TIMEOUT}s min_words={MIN_FINAL_WORDS}")
     logger.info(f"  Translation: DeepSeek ({DEEPSEEK_MODEL})")
     if DEEPSEEK_API_KEY:
         logger.info("  API Key: *** (已配置)")
