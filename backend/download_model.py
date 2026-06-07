@@ -4,6 +4,16 @@ ASR 模型预下载脚本
 可通过环境变量 HF_ENDPOINT 配置 HuggingFace 镜像源。
 """
 
+# 强制 stdout/stderr 使用 UTF-8（必须在 import os 之前）
+import sys as _sys
+import io as _io
+if hasattr(_sys.stdout, 'buffer'):
+    _sys.stdout = _io.TextIOWrapper(_sys.stdout.buffer, encoding='utf-8',
+                                     errors='replace', line_buffering=True)
+if hasattr(_sys.stderr, 'buffer'):
+    _sys.stderr = _io.TextIOWrapper(_sys.stderr.buffer, encoding='utf-8',
+                                     errors='replace', line_buffering=True)
+
 import os
 import sys
 

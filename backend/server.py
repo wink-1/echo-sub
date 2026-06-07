@@ -14,6 +14,19 @@ EchoSub Python 后端 - FastAPI WebSocket 服务器
 以满足相同条件 (标点+长度 或 长停顿+长度)。
 """
 
+# ═══════════════════════════════════════════════════════════════
+# 强制 stdout/stderr 使用 UTF-8（必须在任何 import 之前）
+# 解决 Windows 上 PYTHONIOENCODING 对 logging.StreamHandler 无效的问题
+# ═══════════════════════════════════════════════════════════════
+import sys as _sys
+import io as _io
+if hasattr(_sys.stdout, 'buffer'):
+    _sys.stdout = _io.TextIOWrapper(_sys.stdout.buffer, encoding='utf-8',
+                                     errors='replace', line_buffering=True)
+if hasattr(_sys.stderr, 'buffer'):
+    _sys.stderr = _io.TextIOWrapper(_sys.stderr.buffer, encoding='utf-8',
+                                     errors='replace', line_buffering=True)
+
 import asyncio
 import json
 import logging
@@ -522,8 +535,8 @@ async def send_error(websocket: WebSocket, message: str):
 def init_engines():
     global asr_engine, translator, corrector
 
-    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-    logger.info(f"HF_ENDPOINT: {os.environ.get('HF_ENDPOINT')}")
+    # HF_ENDPOINT 由环境变量或 .env 文件控制，不再硬编码
+    logger.info(f"HF_ENDPOINT: {os.environ.get('HF_ENDPOINT', '(default)')}")
 
     logger.info(f"Initializing ASR engine (model={ASR_MODEL})...")
     asr_engine = ASREngine(model_size=ASR_MODEL)
